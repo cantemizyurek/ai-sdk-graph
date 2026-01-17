@@ -144,6 +144,8 @@ export class Graph<
       context.suspendedNodes = []
       await this.persistCheckpoint(context)
     }
+
+    this.storage.delete(context.runId)
   }
 
   private hasNodesToExecute(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {

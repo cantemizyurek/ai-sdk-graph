@@ -51,6 +51,7 @@ export namespace GraphSDK {
   > {
     save(runId: string, checkpoint: Checkpoint<State, NodeKeys>): Promise<void>
     load(runId: string): Promise<Checkpoint<State, NodeKeys> | null>
+    delete(runId: string): Promise<void>
   }
 
   export interface ExecutionContext<

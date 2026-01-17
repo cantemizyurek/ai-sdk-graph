@@ -14,4 +14,8 @@ export class InMemoryStorage<
   async load(runId: string) {
     return this.store.get(runId) ?? null
   }
+
+  async delete(runId: string) {
+    this.store.delete(runId)
+  }
 }
