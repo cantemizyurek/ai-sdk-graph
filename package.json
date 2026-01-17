@@ -9,6 +9,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "ai": "^6.0.37"
+    "ai": "^6.0.37",
+    "ioredis": "^5.9.2"
   }
 }

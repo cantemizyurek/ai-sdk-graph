@@ -2,8 +2,6 @@ import { InMemoryStorage } from './storage'
 import type { GraphSDK } from './types'
 import { createUIMessageStream } from 'ai'
 
-export { InMemoryStorage } from './storage'
-
 class SuspenseError extends Error {
   readonly data?: unknown
 
