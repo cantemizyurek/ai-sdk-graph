@@ -119,7 +119,8 @@ export class Graph<
     context.state = this.applyStateChanges(context.state, result.states)
 
     if (this.hasNewSuspenses(result)) {
-      await this.saveCheckpointWithSuspenses(context, result.suspenses)
+      context.suspendedNodes = result.suspenses.map((s) => s.node)
+      await this.persistCheckpoint(context)
       return false
     }
 
@@ -136,7 +137,8 @@ export class Graph<
       context.state = this.applyStateChanges(context.state, result.states)
 
       if (this.hasNewSuspenses(result)) {
-        await this.saveCheckpointWithSuspenses(context, result.suspenses)
+        context.suspendedNodes = result.suspenses.map((s) => s.node)
+        await this.persistCheckpoint(context)
         return
       }
 
@@ -212,17 +214,6 @@ export class Graph<
     })
   }
 
-  private async saveCheckpointWithSuspenses(
-    context: GraphSDK.ExecutionContext<State, NodeKeys>,
-    suspenses: Array<{ nodeId: NodeKeys }>
-  ): Promise<void> {
-    await this.storage.save(context.runId, {
-      state: context.state,
-      nodeIds: context.currentNodes.map((n) => n.id),
-      suspendedNodes: suspenses.map((s) => s.nodeId)
-    })
-  }
-
   private async executeBatch(
     nodes: GraphSDK.Node<State, NodeKeys>[],
     state: State,
@@ -238,14 +229,14 @@ export class Graph<
     node: GraphSDK.Node<State, NodeKeys>,
     state: State,
     writer: Writer
-  ): Promise<{ nodeId: NodeKeys; result: Partial<State> | void; suspense?: SuspenseError }> {
+  ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; result: Partial<State> | void; suspense?: SuspenseError }> {
     const result = await this.executeSingleNode(node, state, writer)
 
     if (result instanceof SuspenseError) {
-      return { nodeId: node.id, result: undefined, suspense: result }
+      return { node, result: undefined, suspense: result }
     }
 
-    return { nodeId: node.id, result }
+    return { node, result }
   }
 
   private async executeSingleNode(
@@ -279,14 +270,14 @@ export class Graph<
   }
 
   private partitionExecutionResults(
-    results: Array<{ nodeId: NodeKeys; result: Partial<State> | void; suspense?: SuspenseError }>
+    results: Array<{ node: GraphSDK.Node<State, NodeKeys>; result: Partial<State> | void; suspense?: SuspenseError }>
   ): GraphSDK.NodeExecutionResult<State, NodeKeys> {
     const states: Partial<State>[] = []
-    const suspenses: Array<{ nodeId: NodeKeys; error: SuspenseError }> = []
+    const suspenses: Array<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError }> = []
 
-    for (const { nodeId, result, suspense } of results) {
+    for (const { node, result, suspense } of results) {
       if (suspense) {
-        suspenses.push({ nodeId, error: suspense })
+        suspenses.push({ node, error: suspense })
       } else if (result != null) {
         states.push(result)
       }

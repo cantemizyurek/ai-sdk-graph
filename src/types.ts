@@ -66,6 +66,6 @@ export namespace GraphSDK {
     NodeKeys extends string
   > {
     states: Partial<State>[]
-    suspenses: Array<{ nodeId: NodeKeys; error: Error }>
+    suspenses: Array<{ node: Node<State, NodeKeys>; error: Error }>
   }
 }
