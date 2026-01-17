@@ -1,6 +1,7 @@
 import type { UIMessageStreamWriter } from 'ai'
 
 export namespace GraphSDK {
+  export type StateUpdate<State> = Partial<State> | ((state: State) => Partial<State>)
   export interface Graph<
     State extends Record<string, unknown>,
     NodeKeys extends string
@@ -17,12 +18,14 @@ export namespace GraphSDK {
     execute: ({
       state,
       writer,
-      suspense
+      suspense,
+      update
     }: {
-      state: State
+      state: () => Readonly<State>
       writer: UIMessageStreamWriter
       suspense: (data?: unknown) => never
-    }) => Promise<Partial<State>> | Partial<State> | void
+      update: (update: StateUpdate<State>) => void
+    }) => Promise<void> | void
   }
 
   export interface Edge<
@@ -59,13 +62,5 @@ export namespace GraphSDK {
     currentNodes: Node<State, NodeKeys>[]
     suspendedNodes: Node<State, NodeKeys>[]
     writer: UIMessageStreamWriter
-  }
-
-  export interface NodeExecutionResult<
-    State extends Record<string, unknown>,
-    NodeKeys extends string
-  > {
-    states: Partial<State>[]
-    suspenses: Array<{ node: Node<State, NodeKeys>; error: Error }>
   }
 }

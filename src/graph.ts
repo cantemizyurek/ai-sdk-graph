@@ -36,12 +36,14 @@ export class Graph<
     execute: ({
       state,
       writer,
-      suspense
+      suspense,
+      update
     }: {
-      state: State
+      state: () => Readonly<State>
       writer: Writer
       suspense: (data?: unknown) => never
-    }) => Promise<Partial<State>> | Partial<State> | void
+      update: (update: GraphSDK.StateUpdate<State>) => void
+    }) => Promise<void> | void
   ): Graph<State, NodeKeys | NewKey> {
     const node: GraphSDK.Node<State, NewKey> = { id, execute }
     this.nodeRegistry.set(
@@ -114,12 +116,10 @@ export class Graph<
   }
 
   private async resumeSuspendedNodes(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<boolean> {
-    const result = await this.executeBatch(context.suspendedNodes, context.state, context.writer)
+    const suspenses = await this.executeBatch(context.suspendedNodes, context)
 
-    context.state = this.applyStateChanges(context.state, result.states)
-
-    if (this.hasNewSuspenses(result)) {
-      context.suspendedNodes = result.suspenses.map((s) => s.node)
+    if (suspenses.length > 0) {
+      context.suspendedNodes = suspenses.map((s) => s.node)
       await this.persistCheckpoint(context)
       return false
     }
@@ -132,12 +132,10 @@ export class Graph<
 
   private async executeUntilComplete(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
     while (this.hasNodesToExecute(context)) {
-      const result = await this.executeBatch(context.currentNodes, context.state, context.writer)
+      const suspenses = await this.executeBatch(context.currentNodes, context)
 
-      context.state = this.applyStateChanges(context.state, result.states)
-
-      if (this.hasNewSuspenses(result)) {
-        context.suspendedNodes = result.suspenses.map((s) => s.node)
+      if (suspenses.length > 0) {
+        context.suspendedNodes = suspenses.map((s) => s.node)
         await this.persistCheckpoint(context)
         return
       }
@@ -150,10 +148,6 @@ export class Graph<
 
   private hasNodesToExecute(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {
     return context.currentNodes.length > 0
-  }
-
-  private hasNewSuspenses<T>(result: { suspenses: T[] }): boolean {
-    return result.suspenses.length > 0
   }
 
   private async restoreCheckpoint(
@@ -216,48 +210,35 @@ export class Graph<
 
   private async executeBatch(
     nodes: GraphSDK.Node<State, NodeKeys>[],
-    state: State,
-    writer: Writer
-  ): Promise<GraphSDK.NodeExecutionResult<State, NodeKeys>> {
+    context: GraphSDK.ExecutionContext<State, NodeKeys>
+  ): Promise<Array<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError }>> {
     const results = await Promise.all(
-      nodes.map((node) => this.executeNodeWithMetadata(node, state, writer))
+      nodes.map((node) => this.executeSingleNode(node, context))
     )
-    return this.partitionExecutionResults(results)
-  }
-
-  private async executeNodeWithMetadata(
-    node: GraphSDK.Node<State, NodeKeys>,
-    state: State,
-    writer: Writer
-  ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; result: Partial<State> | void; suspense?: SuspenseError }> {
-    const result = await this.executeSingleNode(node, state, writer)
-
-    if (result instanceof SuspenseError) {
-      return { node, result: undefined, suspense: result }
-    }
-
-    return { node, result }
+    return results.filter((r): r is { node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } => r !== null)
   }
 
   private async executeSingleNode(
     node: GraphSDK.Node<State, NodeKeys>,
-    state: State,
-    writer: Writer
-  ): Promise<Partial<State> | void | SuspenseError> {
-    this.emitNodeStart(writer, node.id)
+    context: GraphSDK.ExecutionContext<State, NodeKeys>
+  ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } | null> {
+    this.emitNodeStart(context.writer, node.id)
 
     try {
-      const result = await node.execute({
-        state: structuredClone(state),
-        writer,
-        suspense: this.createSuspenseFunction()
+      await node.execute({
+        state: () => context.state,
+        writer: context.writer,
+        suspense: this.createSuspenseFunction(),
+        update: (update: GraphSDK.StateUpdate<State>) => {
+          context.state = this.applyStateUpdate(context.state, update)
+        }
       })
-      this.emitNodeEnd(writer, node.id)
-      return result
+      this.emitNodeEnd(context.writer, node.id)
+      return null
     } catch (error) {
       if (error instanceof SuspenseError) {
-        this.emitNodeSuspense(writer, node.id, error.data)
-        return error
+        this.emitNodeSuspense(context.writer, node.id, error.data)
+        return { node, error }
       }
       throw error
     }
@@ -269,28 +250,11 @@ export class Graph<
     }
   }
 
-  private partitionExecutionResults(
-    results: Array<{ node: GraphSDK.Node<State, NodeKeys>; result: Partial<State> | void; suspense?: SuspenseError }>
-  ): GraphSDK.NodeExecutionResult<State, NodeKeys> {
-    const states: Partial<State>[] = []
-    const suspenses: Array<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError }> = []
-
-    for (const { node, result, suspense } of results) {
-      if (suspense) {
-        suspenses.push({ node, error: suspense })
-      } else if (result != null) {
-        states.push(result)
-      }
+  private applyStateUpdate(state: State, update: GraphSDK.StateUpdate<State>): State {
+    return {
+      ...state,
+      ...(typeof update === 'function' ? update(state) : update)
     }
-
-    return { states, suspenses }
-  }
-
-  private applyStateChanges(baseState: State, changes: Partial<State>[]): State {
-    return changes.reduce<State>(
-      (accumulated, change) => ({ ...accumulated, ...change }),
-      baseState
-    )
   }
 
   private resolveNodeIds(nodeIds: NodeKeys[]): GraphSDK.Node<State, NodeKeys>[] {
