@@ -2,7 +2,7 @@ import { InMemoryStorage } from './storage'
 import type { GraphSDK } from './types'
 import { createUIMessageStream } from 'ai'
 
-class SuspenseError extends Error {
+export class SuspenseError extends Error {
   readonly data?: unknown
 
   constructor(data?: unknown) {
@@ -22,6 +22,13 @@ export class Graph<
 > {
   private readonly nodeRegistry: Map<NodeKeys, GraphSDK.Node<State, NodeKeys>> = new Map()
   private readonly edgeRegistry: Map<NodeKeys, GraphSDK.Edge<State, NodeKeys>[]> = new Map()
+  private readonly subgraphRegistry: Map<
+    NodeKeys,
+    {
+      subgraph: Graph<any, any>
+      options: GraphSDK.SubgraphOptions<State, any>
+    }
+  > = new Map()
   private readonly storage: GraphSDK.GraphStorage<State, NodeKeys>
 
   constructor(storage: GraphSDK.GraphStorage<State, NodeKeys> = new InMemoryStorage()) {
@@ -60,6 +67,29 @@ export class Graph<
     return this
   }
 
+  graph<
+    NewKey extends string,
+    ChildState extends Record<string, unknown>,
+    ChildNodeKeys extends string = 'START' | 'END'
+  >(
+    id: NewKey,
+    subgraph: Graph<ChildState, ChildNodeKeys>,
+    options: GraphSDK.SubgraphOptions<State, ChildState>
+  ): Graph<State, NodeKeys | NewKey> {
+    this.subgraphRegistry.set(id as unknown as NodeKeys, { subgraph, options })
+
+    const node: GraphSDK.Node<State, NewKey> = {
+      id,
+      execute: async () => {}
+    }
+    this.nodeRegistry.set(
+      node.id as unknown as NodeKeys,
+      node as unknown as GraphSDK.Node<State, NodeKeys>
+    )
+
+    return this as unknown as Graph<State, NodeKeys | NewKey>
+  }
+
   get nodes(): ReadonlyMap<NodeKeys, GraphSDK.Node<State, NodeKeys>> {
     return this.nodeRegistry
   }
@@ -78,6 +108,16 @@ export class Graph<
         await this.runExecutionLoop(context)
       }
     })
+  }
+
+  async executeInternal(
+    runId: string,
+    initialState: State,
+    writer: Writer
+  ): Promise<State> {
+    const context = await this.createExecutionContext(runId, initialState, writer)
+    await this.runExecutionLoopInternal(context)
+    return context.state
   }
 
   private registerBuiltInNodes(): void {
@@ -107,6 +147,36 @@ export class Graph<
     }
 
     await this.executeUntilComplete(context)
+  }
+
+  private async runExecutionLoopInternal(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
+    if (this.hasSuspendedNodes(context)) {
+      const suspenses = await this.executeBatch(context.suspendedNodes, context)
+      if (suspenses.length > 0) {
+        context.suspendedNodes = suspenses.map((s) => s.node)
+        await this.persistCheckpoint(context)
+        throw new SuspenseError({ type: 'subgraph-suspended' })
+      }
+      context.currentNodes = this.computeNextNodes(context.currentNodes, context.state)
+      context.suspendedNodes = []
+      await this.persistCheckpoint(context)
+    }
+
+    while (this.hasNodesToExecute(context)) {
+      const suspenses = await this.executeBatch(context.currentNodes, context)
+
+      if (suspenses.length > 0) {
+        context.suspendedNodes = suspenses.map((s) => s.node)
+        await this.persistCheckpoint(context)
+        throw new SuspenseError({ type: 'subgraph-suspended' })
+      }
+
+      context.currentNodes = this.computeNextNodes(context.currentNodes, context.state)
+      context.suspendedNodes = []
+      await this.persistCheckpoint(context)
+    }
+
+    await this.storage.delete(context.runId)
   }
 
   private hasSuspendedNodes(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {
@@ -222,6 +292,12 @@ export class Graph<
     node: GraphSDK.Node<State, NodeKeys>,
     context: GraphSDK.ExecutionContext<State, NodeKeys>
   ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } | null> {
+    const subgraphEntry = this.subgraphRegistry.get(node.id)
+
+    if (subgraphEntry) {
+      return this.executeSubgraphNode(node, context, subgraphEntry)
+    }
+
     this.emitNodeStart(context.writer, node.id)
 
     try {
@@ -233,6 +309,38 @@ export class Graph<
           context.state = this.applyStateUpdate(context.state, update)
         }
       })
+      this.emitNodeEnd(context.writer, node.id)
+      return null
+    } catch (error) {
+      if (error instanceof SuspenseError) {
+        this.emitNodeSuspense(context.writer, node.id, error.data)
+        return { node, error }
+      }
+      throw error
+    }
+  }
+
+  private async executeSubgraphNode(
+    node: GraphSDK.Node<State, NodeKeys>,
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    entry: { subgraph: Graph<any, any>; options: GraphSDK.SubgraphOptions<State, any> }
+  ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } | null> {
+    const { subgraph, options } = entry
+
+    this.emitNodeStart(context.writer, node.id)
+
+    const subgraphRunId = `${context.runId}:subgraph:${node.id}`
+
+    try {
+      const childFinalState = await subgraph.executeInternal(
+        subgraphRunId,
+        options.input(context.state),
+        context.writer
+      )
+
+      const parentUpdate = options.output(childFinalState, context.state)
+      context.state = this.applyStateUpdate(context.state, parentUpdate)
+
       this.emitNodeEnd(context.writer, node.id)
       return null
     } catch (error) {

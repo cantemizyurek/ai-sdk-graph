@@ -2,6 +2,14 @@ import type { UIMessageStreamWriter } from 'ai'
 
 export namespace GraphSDK {
   export type StateUpdate<State> = Partial<State> | ((state: State) => Partial<State>)
+
+  export interface SubgraphOptions<
+    ParentState extends Record<string, unknown>,
+    ChildState extends Record<string, unknown>
+  > {
+    input: (parentState: ParentState) => ChildState
+    output: (childState: ChildState, parentState: ParentState) => Partial<ParentState>
+  }
   export interface Graph<
     State extends Record<string, unknown>,
     NodeKeys extends string
