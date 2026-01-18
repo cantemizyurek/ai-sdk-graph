@@ -39,10 +39,12 @@ export class Graph<
   private readonly storage: GraphSDK.GraphStorage<State, NodeKeys>
   private readonly emitter = new NodeEventEmitter<NodeKeys>()
   private readonly stateManager = new StateManager<State>()
+  private readonly onFinish: (state: State) => Promise<void> | void
 
-  constructor(storage: GraphSDK.GraphStorage<State, NodeKeys> = new InMemoryStorage()) {
-    this.storage = storage
+  constructor(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: (state: State) => Promise<void> | void } = {}) {
+    this.storage = options.storage ?? new InMemoryStorage()
     this.registerBuiltInNodes()
+    this.onFinish = options.onFinish ?? ((state) => {})
   }
 
   node<NewKey extends string>(
@@ -184,10 +186,16 @@ export class Graph<
     runId: string,
     initialState: State | ((state: State | undefined) => State)
   ) {
+    let context: GraphSDK.ExecutionContext<State, NodeKeys> | undefined
     return createUIMessageStream({
       execute: async ({ writer }) => {
-        const context = await this.createExecutionContext(runId, initialState, writer)
+        context = await this.createExecutionContext(runId, initialState, writer)
         await this.runExecutionLoop(context)
+      },
+      onFinish: async () => {
+        if (context) {
+          await this.onFinish(context.state)
+        }
       }
     })
   }
@@ -492,8 +500,11 @@ export class Graph<
 export function graph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
->(storage?: GraphSDK.GraphStorage<State, NodeKeys>) {
-  return new Graph<State, NodeKeys>(storage)
+>(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: (state: State) => Promise<void> | void } = {}) {
+  return new Graph<State, NodeKeys>({
+    storage: options.storage,
+    onFinish: options.onFinish
+  })
 }
 class NodeEventEmitter<NodeKeys extends string> {
   emitStart(writer: Writer, nodeId: NodeKeys): void {
