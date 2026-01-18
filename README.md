@@ -1,6 +1,6 @@
 # ai-sdk-graph
 
-A TypeScript library for building stateful, resumable DAG-based workflows with human-in-the-loop support.
+A TypeScript library for building stateful, resumable workflows with human-in-the-loop support.
 
 ## Features
 
