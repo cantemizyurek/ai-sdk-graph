@@ -1,7 +1,25 @@
 {
   "name": "ai-sdk-graph",
-  "module": "src/index.ts",
+  "version": "0.1.0",
+  "description": "Graph-based workflows for the AI SDK",
   "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build src/index.ts --outdir dist --target node && tsc -p tsconfig.build.json"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
