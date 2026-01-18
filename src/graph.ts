@@ -107,6 +107,79 @@ export class Graph<
     return this.edgeRegistry
   }
 
+  get subgraphs(): ReadonlyMap<
+    NodeKeys,
+    { subgraph: Graph<any, any>; options: GraphSDK.SubgraphOptions<State, any> }
+  > {
+    return this.subgraphRegistry
+  }
+
+  toMermaid(options?: { direction?: 'TB' | 'LR' }): string {
+    const direction = options?.direction ?? 'TB'
+    return this.generateMermaid(direction, '')
+  }
+
+  private generateMermaid(direction: 'TB' | 'LR', prefix: string): string {
+    const lines: string[] = []
+    const indent = prefix ? '        ' : '    '
+
+    if (!prefix) {
+      lines.push(`flowchart ${direction}`)
+    }
+
+    for (const [nodeId] of this.nodeRegistry) {
+      const prefixedId = prefix ? `${prefix}_${nodeId}` : nodeId
+      const subgraphEntry = this.subgraphRegistry.get(nodeId)
+
+      if (subgraphEntry) {
+        lines.push(`${indent}subgraph ${prefixedId}[${nodeId}]`)
+        lines.push(`${indent}    direction ${direction}`)
+        const subgraphContent = subgraphEntry.subgraph.generateMermaid(direction, prefixedId)
+        const subgraphLines = subgraphContent.split('\n')
+        lines.push(...subgraphLines.map(line => `${indent}${line}`))
+        lines.push(`${indent}end`)
+      } else if (nodeId === 'START' || nodeId === 'END') {
+        lines.push(`${indent}${prefixedId}([${nodeId}])`)
+      } else {
+        lines.push(`${indent}${prefixedId}[${nodeId}]`)
+      }
+    }
+
+    for (const [fromId, edges] of this.edgeRegistry) {
+      for (const edge of edges) {
+        const prefixedFrom = prefix ? `${prefix}_${fromId}` : fromId
+
+        if (typeof edge.to === 'function') {
+          const possibleTargets = this.extractPossibleTargets(edge.to)
+          for (const targetId of possibleTargets) {
+            const prefixedTo = prefix ? `${prefix}_${targetId}` : targetId
+            lines.push(`${indent}${prefixedFrom} -.->|conditional| ${prefixedTo}`)
+          }
+        } else {
+          const prefixedTo = prefix ? `${prefix}_${edge.to}` : edge.to
+          lines.push(`${indent}${prefixedFrom} --> ${prefixedTo}`)
+        }
+      }
+    }
+
+    return lines.join('\n')
+  }
+
+  private extractPossibleTargets(
+    edgeFn: (state: State) => NodeKeys
+  ): NodeKeys[] {
+    const fnString = edgeFn.toString()
+    const nodeIds = Array.from(this.nodeRegistry.keys())
+    return nodeIds.filter(nodeId => {
+      const patterns = [
+        `'${nodeId}'`,
+        `"${nodeId}"`,
+        `\`${nodeId}\``
+      ]
+      return patterns.some(pattern => fnString.includes(pattern))
+    })
+  }
+
   execute(
     runId: string,
     initialState: State | ((state: State | undefined) => State)
