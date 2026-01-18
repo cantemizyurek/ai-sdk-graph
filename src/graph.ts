@@ -153,7 +153,7 @@ export class Graph<
           const possibleTargets = this.extractPossibleTargets(edge.to)
           for (const targetId of possibleTargets) {
             const prefixedTo = prefix ? `${prefix}_${targetId}` : targetId
-            lines.push(`${indent}${prefixedFrom} -.->|conditional| ${prefixedTo}`)
+            lines.push(`${indent}${prefixedFrom} -.-> ${prefixedTo}`)
           }
         } else {
           const prefixedTo = prefix ? `${prefix}_${edge.to}` : edge.to
