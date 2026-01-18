@@ -2,6 +2,13 @@ import { InMemoryStorage } from './storage'
 import type { GraphSDK } from './types'
 import { createUIMessageStream } from 'ai'
 
+const BUILT_IN_NODES = {
+  START: 'START',
+  END: 'END',
+} as const
+
+type SuspenseStrategy = 'return' | 'throw'
+
 export class SuspenseError extends Error {
   readonly data?: unknown
 
@@ -30,6 +37,8 @@ export class Graph<
     }
   > = new Map()
   private readonly storage: GraphSDK.GraphStorage<State, NodeKeys>
+  private readonly emitter = new NodeEventEmitter<NodeKeys>()
+  private readonly stateManager = new StateManager<State>()
 
   constructor(storage: GraphSDK.GraphStorage<State, NodeKeys> = new InMemoryStorage()) {
     this.storage = storage
@@ -121,8 +130,8 @@ export class Graph<
   }
 
   private registerBuiltInNodes(): void {
-    this.node('START' as NodeKeys & string, () => {})
-    this.node('END' as NodeKeys & string, () => {})
+    this.node(BUILT_IN_NODES.START as NodeKeys & string, () => {})
+    this.node(BUILT_IN_NODES.END as NodeKeys & string, () => {})
   }
 
   private addEdgeToRegistry(edge: GraphSDK.Edge<State, NodeKeys>): void {
@@ -141,54 +150,58 @@ export class Graph<
   }
 
   private async runExecutionLoop(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
-    if (this.hasSuspendedNodes(context)) {
-      const shouldContinue = await this.resumeSuspendedNodes(context)
-      if (!shouldContinue) return
-    }
-
-    await this.executeUntilComplete(context)
+    await this.executeWithStrategy(context, 'return')
   }
 
   private async runExecutionLoopInternal(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
+    await this.executeWithStrategy(context, 'throw')
+  }
+
+  private async executeWithStrategy(
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    strategy: SuspenseStrategy
+  ): Promise<void> {
     if (this.hasSuspendedNodes(context)) {
-      const suspenses = await this.executeBatch(context.suspendedNodes, context)
-      if (suspenses.length > 0) {
-        context.suspendedNodes = suspenses.map((s) => s.node)
-        await this.persistCheckpoint(context)
-        throw new SuspenseError({ type: 'subgraph-suspended' })
-      }
-      context.currentNodes = this.computeNextNodes(context.currentNodes, context.state)
-      context.suspendedNodes = []
-      await this.persistCheckpoint(context)
+      const shouldContinue = await this.resumeWithStrategy(context, strategy)
+      if (!shouldContinue) return
     }
 
+    await this.executeNodesWithStrategy(context, strategy)
+  }
+
+  private async resumeWithStrategy(
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    strategy: SuspenseStrategy
+  ): Promise<boolean> {
+    const suspenses = await this.executeBatch(context.suspendedNodes, context)
+    return this.handleBatchResultWithStrategy(context, suspenses, strategy)
+  }
+
+  private async executeNodesWithStrategy(
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    strategy: SuspenseStrategy
+  ): Promise<void> {
     while (this.hasNodesToExecute(context)) {
       const suspenses = await this.executeBatch(context.currentNodes, context)
-
-      if (suspenses.length > 0) {
-        context.suspendedNodes = suspenses.map((s) => s.node)
-        await this.persistCheckpoint(context)
-        throw new SuspenseError({ type: 'subgraph-suspended' })
-      }
-
-      context.currentNodes = this.computeNextNodes(context.currentNodes, context.state)
-      context.suspendedNodes = []
-      await this.persistCheckpoint(context)
+      const shouldContinue = await this.handleBatchResultWithStrategy(context, suspenses, strategy)
+      if (!shouldContinue) return
     }
 
     await this.storage.delete(context.runId)
   }
 
-  private hasSuspendedNodes(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {
-    return context.suspendedNodes.length > 0
-  }
-
-  private async resumeSuspendedNodes(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<boolean> {
-    const suspenses = await this.executeBatch(context.suspendedNodes, context)
-
+  private async handleBatchResultWithStrategy(
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    suspenses: Array<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError }>,
+    strategy: SuspenseStrategy
+  ): Promise<boolean> {
     if (suspenses.length > 0) {
       context.suspendedNodes = suspenses.map((s) => s.node)
       await this.persistCheckpoint(context)
+
+      if (strategy === 'throw') {
+        throw new SuspenseError({ type: 'subgraph-suspended' })
+      }
       return false
     }
 
@@ -198,22 +211,8 @@ export class Graph<
     return true
   }
 
-  private async executeUntilComplete(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
-    while (this.hasNodesToExecute(context)) {
-      const suspenses = await this.executeBatch(context.currentNodes, context)
-
-      if (suspenses.length > 0) {
-        context.suspendedNodes = suspenses.map((s) => s.node)
-        await this.persistCheckpoint(context)
-        return
-      }
-
-      context.currentNodes = this.computeNextNodes(context.currentNodes, context.state)
-      context.suspendedNodes = []
-      await this.persistCheckpoint(context)
-    }
-
-    this.storage.delete(context.runId)
+  private hasSuspendedNodes(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {
+    return context.suspendedNodes.length > 0
   }
 
   private hasNodesToExecute(context: GraphSDK.ExecutionContext<State, NodeKeys>): boolean {
@@ -236,14 +235,24 @@ export class Graph<
   private isValidCheckpoint(
     checkpoint: GraphSDK.Checkpoint<State, NodeKeys> | null
   ): checkpoint is GraphSDK.Checkpoint<State, NodeKeys> {
-    return checkpoint?.nodeIds?.length != null && checkpoint.nodeIds.length > 0
+    return this.hasNodeIds(checkpoint) && this.hasAtLeastOneNode(checkpoint)
+  }
+
+  private hasNodeIds(
+    checkpoint: GraphSDK.Checkpoint<State, NodeKeys> | null
+  ): checkpoint is GraphSDK.Checkpoint<State, NodeKeys> {
+    return checkpoint?.nodeIds != null
+  }
+
+  private hasAtLeastOneNode(checkpoint: GraphSDK.Checkpoint<State, NodeKeys>): boolean {
+    return checkpoint.nodeIds.length > 0
   }
 
   private restoreFromCheckpoint(
     checkpoint: GraphSDK.Checkpoint<State, NodeKeys>,
     initialState: State | ((state: State | undefined) => State)
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.resolveInitialState(initialState, checkpoint.state)
+    const state = this.stateManager.resolve(initialState, checkpoint.state)
     return {
       state,
       currentNodes: this.resolveNodeIds(checkpoint.nodeIds),
@@ -254,20 +263,13 @@ export class Graph<
   private createFreshExecution(
     initialState: State | ((state: State | undefined) => State)
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.resolveInitialState(initialState, undefined)
-    const startNode = this.nodeRegistry.get('START' as NodeKeys)!
+    const state = this.stateManager.resolve(initialState, undefined)
+    const startNode = this.nodeRegistry.get(BUILT_IN_NODES.START as NodeKeys)!
     return {
       state,
       currentNodes: [startNode],
       suspendedNodes: []
     }
-  }
-
-  private resolveInitialState(
-    initialState: State | ((state: State | undefined) => State),
-    existingState: State | undefined
-  ): State {
-    return typeof initialState === 'function' ? initialState(existingState) : existingState ?? initialState
   }
 
   private async persistCheckpoint(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
@@ -298,25 +300,31 @@ export class Graph<
       return this.executeSubgraphNode(node, context, subgraphEntry)
     }
 
-    this.emitNodeStart(context.writer, node.id)
+    this.emitter.emitStart(context.writer, node.id)
 
     try {
-      await node.execute({
-        state: () => context.state,
-        writer: context.writer,
-        suspense: this.createSuspenseFunction(),
-        update: (update: GraphSDK.StateUpdate<State>) => {
-          context.state = this.applyStateUpdate(context.state, update)
-        }
-      })
-      this.emitNodeEnd(context.writer, node.id)
+      await node.execute(this.createNodeExecutionParams(context))
+      this.emitter.emitEnd(context.writer, node.id)
       return null
     } catch (error) {
       if (error instanceof SuspenseError) {
-        this.emitNodeSuspense(context.writer, node.id, error.data)
+        this.emitter.emitSuspense(context.writer, node.id, error.data)
         return { node, error }
       }
       throw error
+    }
+  }
+
+  private createNodeExecutionParams(
+    context: GraphSDK.ExecutionContext<State, NodeKeys>
+  ): Parameters<GraphSDK.Node<State, NodeKeys>['execute']>[0] {
+    return {
+      state: () => context.state,
+      writer: context.writer,
+      suspense: this.createSuspenseFunction(),
+      update: (update: GraphSDK.StateUpdate<State>) => {
+        context.state = this.stateManager.apply(context.state, update)
+      }
     }
   }
 
@@ -327,9 +335,9 @@ export class Graph<
   ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } | null> {
     const { subgraph, options } = entry
 
-    this.emitNodeStart(context.writer, node.id)
+    this.emitter.emitStart(context.writer, node.id)
 
-    const subgraphRunId = `${context.runId}:subgraph:${node.id}`
+    const subgraphRunId = this.generateSubgraphRunId(context.runId, node.id)
 
     try {
       const childFinalState = await subgraph.executeInternal(
@@ -339,29 +347,26 @@ export class Graph<
       )
 
       const parentUpdate = options.output(childFinalState, context.state)
-      context.state = this.applyStateUpdate(context.state, parentUpdate)
+      context.state = this.stateManager.apply(context.state, parentUpdate)
 
-      this.emitNodeEnd(context.writer, node.id)
+      this.emitter.emitEnd(context.writer, node.id)
       return null
     } catch (error) {
       if (error instanceof SuspenseError) {
-        this.emitNodeSuspense(context.writer, node.id, error.data)
+        this.emitter.emitSuspense(context.writer, node.id, error.data)
         return { node, error }
       }
       throw error
     }
   }
 
+  private generateSubgraphRunId(parentRunId: string, nodeId: NodeKeys): string {
+    return `${parentRunId}:subgraph:${nodeId}`
+  }
+
   private createSuspenseFunction(): (data?: unknown) => never {
     return (data?: unknown): never => {
       throw new SuspenseError(data)
-    }
-  }
-
-  private applyStateUpdate(state: State, update: GraphSDK.StateUpdate<State>): State {
-    return {
-      ...state,
-      ...(typeof update === 'function' ? update(state) : update)
     }
   }
 
@@ -407,19 +412,7 @@ export class Graph<
   private excludeTerminalNodes(
     nodes: GraphSDK.Node<State, NodeKeys>[]
   ): GraphSDK.Node<State, NodeKeys>[] {
-    return nodes.filter((node) => node.id !== 'END')
-  }
-
-  private emitNodeStart(writer: Writer, nodeId: NodeKeys): void {
-    writer.write({ type: 'data-node-start', data: nodeId })
-  }
-
-  private emitNodeEnd(writer: Writer, nodeId: NodeKeys): void {
-    writer.write({ type: 'data-node-end', data: nodeId })
-  }
-
-  private emitNodeSuspense(writer: Writer, nodeId: NodeKeys, data: unknown): void {
-    writer.write({ type: 'data-node-suspense', data: { nodeId, data } })
+    return nodes.filter((node) => node.id !== BUILT_IN_NODES.END)
   }
 }
 
@@ -428,4 +421,42 @@ export function graph<
   NodeKeys extends string = 'START' | 'END'
 >(storage?: GraphSDK.GraphStorage<State, NodeKeys>) {
   return new Graph<State, NodeKeys>(storage)
+}
+class NodeEventEmitter<NodeKeys extends string> {
+  emitStart(writer: Writer, nodeId: NodeKeys): void {
+    writer.write({ type: 'data-node-start', data: nodeId })
+  }
+
+  emitEnd(writer: Writer, nodeId: NodeKeys): void {
+    writer.write({ type: 'data-node-end', data: nodeId })
+  }
+
+  emitSuspense(writer: Writer, nodeId: NodeKeys, data: unknown): void {
+    writer.write({ type: 'data-node-suspense', data: { nodeId, data } })
+  }
+}
+
+class StateManager<State extends Record<string, unknown>> {
+  apply(state: State, update: GraphSDK.StateUpdate<State>): State {
+    return {
+      ...state,
+      ...(typeof update === 'function' ? update(state) : update)
+    }
+  }
+
+  resolve(
+    initialState: State | ((state: State | undefined) => State),
+    existingState: State | undefined
+  ): State {
+    if (this.isStateFactory(initialState)) {
+      return initialState(existingState)
+    }
+    return existingState ?? initialState
+  }
+
+  private isStateFactory(
+    initialState: State | ((state: State | undefined) => State)
+  ): initialState is (state: State | undefined) => State {
+    return typeof initialState === 'function'
+  }
 }
