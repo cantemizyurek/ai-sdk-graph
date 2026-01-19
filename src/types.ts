@@ -72,4 +72,13 @@ export namespace GraphSDK {
     suspendedNodes: Node<State, NodeKeys>[]
     writer: UIMessageStreamWriter
   }
+
+  export interface GraphOptions<
+    State extends Record<string, unknown>,
+    NodeKeys extends string
+  > {
+    storage?: GraphStorage<State, NodeKeys>
+    onFinish?: (args: { state: State }) => Promise<void> | void
+    onStart?: (args: { state: State; writer: UIMessageStreamWriter }) => Promise<void> | void
+  }
 }

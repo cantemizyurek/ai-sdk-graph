@@ -42,7 +42,7 @@ export class Graph<
   private readonly onFinish: ({ state }: { state: State }) => Promise<void> | void
   private readonly onStart: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void
 
-  constructor(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void, onStart?: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void } = {}) {
+  constructor(options: GraphSDK.GraphOptions<State, NodeKeys> = {}) {
     this.storage = options.storage ?? new InMemoryStorage()
     this.registerBuiltInNodes()
     this.onFinish = options.onFinish ?? (() => { })
@@ -446,12 +446,8 @@ export class Graph<
 export function graph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
->(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void } = {}, onStart?: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void) {
-  return new Graph<State, NodeKeys>({
-    storage: options.storage,
-    onFinish: options.onFinish,
-    onStart: onStart
-  })
+>(options: GraphSDK.GraphOptions<State, NodeKeys> = {}) {
+  return new Graph<State, NodeKeys>(options)
 }
 
 class NodeEventEmitter<NodeKeys extends string> {
