@@ -39,12 +39,14 @@ export class Graph<
   private readonly storage: GraphSDK.GraphStorage<State, NodeKeys>
   private readonly emitter = new NodeEventEmitter<NodeKeys>()
   private readonly stateManager = new StateManager<State>()
-  private readonly onFinish: (state: State) => Promise<void> | void
+  private readonly onFinish: ({ state }: { state: State }) => Promise<void> | void
+  private readonly onStart: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void
 
-  constructor(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: (state: State) => Promise<void> | void } = {}) {
+  constructor(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void, onStart?: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void } = {}) {
     this.storage = options.storage ?? new InMemoryStorage()
     this.registerBuiltInNodes()
-    this.onFinish = options.onFinish ?? ((state) => {})
+    this.onFinish = options.onFinish ?? (() => { })
+    this.onStart = options.onStart ?? (() => { })
   }
 
   node<NewKey extends string>(
@@ -91,7 +93,7 @@ export class Graph<
 
     const node: GraphSDK.Node<State, NewKey> = {
       id,
-      execute: async () => {}
+      execute: async () => { }
     }
     this.nodeRegistry.set(
       node.id as unknown as NodeKeys,
@@ -133,11 +135,12 @@ export class Graph<
     return createUIMessageStream({
       execute: async ({ writer }) => {
         context = await this.createExecutionContext(runId, initialState, writer)
+        await this.onStart({ state: context.state, writer })
         await this.runExecutionLoop(context)
       },
       onFinish: async () => {
         if (context) {
-          await this.onFinish(context.state)
+          await this.onFinish({ state: context.state })
         }
       }
     })
@@ -154,8 +157,8 @@ export class Graph<
   }
 
   private registerBuiltInNodes(): void {
-    this.node(BUILT_IN_NODES.START as NodeKeys & string, () => {})
-    this.node(BUILT_IN_NODES.END as NodeKeys & string, () => {})
+    this.node(BUILT_IN_NODES.START as NodeKeys & string, () => { })
+    this.node(BUILT_IN_NODES.END as NodeKeys & string, () => { })
   }
 
   private addEdgeToRegistry(edge: GraphSDK.Edge<State, NodeKeys>): void {
@@ -443,7 +446,7 @@ export class Graph<
 export function graph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
->(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: (state: State) => Promise<void> | void } = {}) {
+>(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void } = {}) {
   return new Graph<State, NodeKeys>({
     storage: options.storage,
     onFinish: options.onFinish
@@ -500,7 +503,7 @@ class MermaidGenerator<
       NodeKeys,
       { subgraph: Graph<any, any>; options: GraphSDK.SubgraphOptions<State, any> }
     >
-  ) {}
+  ) { }
 
   generate(options?: { direction?: 'TB' | 'LR' }): string {
     const direction = options?.direction ?? 'TB'
