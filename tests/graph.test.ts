@@ -271,7 +271,7 @@ describe('Graph - Checkpointing', () => {
   test('checkpoint is saved on suspense', async () => {
     const storage = new InMemoryStorage<{ value: number }, string>()
 
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('a', ({ suspense }) => {
         suspense()
       })
@@ -289,7 +289,7 @@ describe('Graph - Checkpointing', () => {
   test('checkpoint is deleted on completion', async () => {
     const storage = new InMemoryStorage<{ value: number }, string>()
 
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('a', () => {})
       .edge('START', 'a')
       .edge('a', 'END')
@@ -303,7 +303,7 @@ describe('Graph - Checkpointing', () => {
   test('different runIds have separate checkpoints', async () => {
     const storage = new InMemoryStorage<{ value: number }, string>()
 
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('a', ({ state, suspense }) => {
         if (state().value < 100) suspense()
       })
@@ -642,7 +642,7 @@ describe('Graph - Edge Cases', () => {
     const storage = new InMemoryStorage<{ value: number }, string>()
     const executionOrder: string[] = []
 
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('fork', () => { executionOrder.push('fork') })
       .node('suspendA', ({ suspense }) => {
         executionOrder.push('suspendA')
@@ -731,7 +731,7 @@ describe('Graph - Checkpoint Edge Cases', () => {
     })
 
     const executionOrder: string[] = []
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('a', () => { executionOrder.push('a') })
       .edge('START', 'a')
       .edge('a', 'END')
@@ -750,7 +750,7 @@ describe('Graph - Checkpoint Edge Cases', () => {
     })
 
     const executionOrder: string[] = []
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('real', () => { executionOrder.push('real') })
       .edge('START', 'real')
       .edge('real', 'END')
@@ -765,7 +765,7 @@ describe('Graph - Checkpoint Edge Cases', () => {
     let callCount = 0
     let receivedExisting: { value: number } | undefined
 
-    const g = graph<{ value: number }>(storage as any)
+    const g = graph<{ value: number }>({ storage: storage as any })
       .node('suspender', ({ suspense }) => {
         callCount++
         if (callCount === 1) {
@@ -1003,7 +1003,7 @@ describe('Graph - executeInternal', () => {
     const storage = new InMemoryStorage<{ callCount: number }, string>()
     const executionOrder: string[] = []
 
-    const g = graph<{ callCount: number }>(storage as any)
+    const g = graph<{ callCount: number }>({ storage: storage as any })
       .node('conditional', ({ state, suspense, update }) => {
         const count = state().callCount
         executionOrder.push(`conditional:${count}`)
@@ -1044,7 +1044,7 @@ describe('Graph - Concurrent Executions', () => {
   test('multiple executions with same storage are isolated', async () => {
     const storage = new InMemoryStorage<{ id: string }, string>()
 
-    const g = graph<{ id: string }>(storage as any)
+    const g = graph<{ id: string }>({ storage: storage as any })
       .node('suspender', ({ state, suspense }) => {
         if (state().id === 'suspend-me') {
           suspense()
@@ -1099,7 +1099,7 @@ describe('Graph - Checkpoint Persistence Across Batches', () => {
   test('state is persisted after each batch execution', async () => {
     const storage = new InMemoryStorage<{ step: number }, string>()
 
-    const g = graph<{ step: number }>(storage as any)
+    const g = graph<{ step: number }>({ storage: storage as any })
       .node('step1', ({ update }) => {
         update({ step: 1 })
       })
