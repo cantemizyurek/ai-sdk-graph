@@ -117,69 +117,12 @@ export class Graph<
   }
 
   toMermaid(options?: { direction?: 'TB' | 'LR' }): string {
-    const direction = options?.direction ?? 'TB'
-    return this.generateMermaid(direction, '')
-  }
-
-  private generateMermaid(direction: 'TB' | 'LR', prefix: string): string {
-    const lines: string[] = []
-    const indent = prefix ? '        ' : '    '
-
-    if (!prefix) {
-      lines.push(`flowchart ${direction}`)
-    }
-
-    for (const [nodeId] of this.nodeRegistry) {
-      const prefixedId = prefix ? `${prefix}_${nodeId}` : nodeId
-      const subgraphEntry = this.subgraphRegistry.get(nodeId)
-
-      if (subgraphEntry) {
-        lines.push(`${indent}subgraph ${prefixedId}[${nodeId}]`)
-        lines.push(`${indent}    direction ${direction}`)
-        const subgraphContent = subgraphEntry.subgraph.generateMermaid(direction, prefixedId)
-        const subgraphLines = subgraphContent.split('\n')
-        lines.push(...subgraphLines.map(line => `${indent}${line}`))
-        lines.push(`${indent}end`)
-      } else if (nodeId === 'START' || nodeId === 'END') {
-        lines.push(`${indent}${prefixedId}([${nodeId}])`)
-      } else {
-        lines.push(`${indent}${prefixedId}[${nodeId}]`)
-      }
-    }
-
-    for (const [fromId, edges] of this.edgeRegistry) {
-      for (const edge of edges) {
-        const prefixedFrom = prefix ? `${prefix}_${fromId}` : fromId
-
-        if (typeof edge.to === 'function') {
-          const possibleTargets = this.extractPossibleTargets(edge.to)
-          for (const targetId of possibleTargets) {
-            const prefixedTo = prefix ? `${prefix}_${targetId}` : targetId
-            lines.push(`${indent}${prefixedFrom} -.-> ${prefixedTo}`)
-          }
-        } else {
-          const prefixedTo = prefix ? `${prefix}_${edge.to}` : edge.to
-          lines.push(`${indent}${prefixedFrom} --> ${prefixedTo}`)
-        }
-      }
-    }
-
-    return lines.join('\n')
-  }
-
-  private extractPossibleTargets(
-    edgeFn: (state: State) => NodeKeys
-  ): NodeKeys[] {
-    const fnString = edgeFn.toString()
-    const nodeIds = Array.from(this.nodeRegistry.keys())
-    return nodeIds.filter(nodeId => {
-      const patterns = [
-        `'${nodeId}'`,
-        `"${nodeId}"`,
-        `\`${nodeId}\``
-      ]
-      return patterns.some(pattern => fnString.includes(pattern))
-    })
+    const generator = new MermaidGenerator(
+      this.nodeRegistry,
+      this.edgeRegistry,
+      this.subgraphRegistry
+    )
+    return generator.generate(options)
   }
 
   execute(
@@ -506,6 +449,7 @@ export function graph<
     onFinish: options.onFinish
   })
 }
+
 class NodeEventEmitter<NodeKeys extends string> {
   emitStart(writer: Writer, nodeId: NodeKeys): void {
     writer.write({ type: 'data-node-start', data: nodeId })
@@ -542,5 +486,90 @@ class StateManager<State extends Record<string, unknown>> {
     initialState: State | ((state: State | undefined) => State)
   ): initialState is (state: State | undefined) => State {
     return typeof initialState === 'function'
+  }
+}
+
+class MermaidGenerator<
+  State extends Record<string, unknown>,
+  NodeKeys extends string
+> {
+  constructor(
+    private readonly nodeRegistry: ReadonlyMap<NodeKeys, GraphSDK.Node<State, NodeKeys>>,
+    private readonly edgeRegistry: ReadonlyMap<NodeKeys, GraphSDK.Edge<State, NodeKeys>[]>,
+    private readonly subgraphRegistry: ReadonlyMap<
+      NodeKeys,
+      { subgraph: Graph<any, any>; options: GraphSDK.SubgraphOptions<State, any> }
+    >
+  ) {}
+
+  generate(options?: { direction?: 'TB' | 'LR' }): string {
+    const direction = options?.direction ?? 'TB'
+    return this.generateMermaid(direction, '')
+  }
+
+  private generateMermaid(direction: 'TB' | 'LR', prefix: string): string {
+    const lines: string[] = []
+    const indent = prefix ? '        ' : '    '
+
+    if (!prefix) {
+      lines.push(`flowchart ${direction}`)
+    }
+
+    for (const [nodeId] of this.nodeRegistry) {
+      const prefixedId = prefix ? `${prefix}_${nodeId}` : nodeId
+      const subgraphEntry = this.subgraphRegistry.get(nodeId)
+
+      if (subgraphEntry) {
+        lines.push(`${indent}subgraph ${prefixedId}[${nodeId}]`)
+        lines.push(`${indent}    direction ${direction}`)
+        const subgraphGenerator = new MermaidGenerator(
+          subgraphEntry.subgraph.nodes,
+          subgraphEntry.subgraph.edges,
+          subgraphEntry.subgraph.subgraphs
+        )
+        const subgraphContent = subgraphGenerator.generateMermaid(direction, prefixedId)
+        const subgraphLines = subgraphContent.split('\n')
+        lines.push(...subgraphLines.map(line => `${indent}${line}`))
+        lines.push(`${indent}end`)
+      } else if (nodeId === 'START' || nodeId === 'END') {
+        lines.push(`${indent}${prefixedId}([${nodeId}])`)
+      } else {
+        lines.push(`${indent}${prefixedId}[${nodeId}]`)
+      }
+    }
+
+    for (const [fromId, edges] of this.edgeRegistry) {
+      for (const edge of edges) {
+        const prefixedFrom = prefix ? `${prefix}_${fromId}` : fromId
+
+        if (typeof edge.to === 'function') {
+          const possibleTargets = this.extractPossibleTargets(edge.to)
+          for (const targetId of possibleTargets) {
+            const prefixedTo = prefix ? `${prefix}_${targetId}` : targetId
+            lines.push(`${indent}${prefixedFrom} -.-> ${prefixedTo}`)
+          }
+        } else {
+          const prefixedTo = prefix ? `${prefix}_${edge.to}` : edge.to
+          lines.push(`${indent}${prefixedFrom} --> ${prefixedTo}`)
+        }
+      }
+    }
+
+    return lines.join('\n')
+  }
+
+  private extractPossibleTargets(
+    edgeFn: (state: State) => NodeKeys
+  ): NodeKeys[] {
+    const fnString = edgeFn.toString()
+    const nodeIds = Array.from(this.nodeRegistry.keys())
+    return nodeIds.filter(nodeId => {
+      const patterns = [
+        `'${nodeId}'`,
+        `"${nodeId}"`,
+        `\`${nodeId}\``
+      ]
+      return patterns.some(pattern => fnString.includes(pattern))
+    })
   }
 }

@@ -85,8 +85,8 @@ describe('Graph - Mermaid Visualization', () => {
     expect(mermaid).toContain('router[router]')
     expect(mermaid).toContain('left[left]')
     expect(mermaid).toContain('right[right]')
-    expect(mermaid).toContain('router -.->|conditional| left')
-    expect(mermaid).toContain('router -.->|conditional| right')
+    expect(mermaid).toContain('router -.-> left')
+    expect(mermaid).toContain('router -.-> right')
   })
 
   test('generates mermaid for conditional edge with ternary', () => {
@@ -101,8 +101,8 @@ describe('Graph - Mermaid Visualization', () => {
 
     const mermaid = g.toMermaid()
 
-    expect(mermaid).toContain('a -.->|conditional| b')
-    expect(mermaid).toContain('a -.->|conditional| c')
+    expect(mermaid).toContain('a -.-> b')
+    expect(mermaid).toContain('a -.-> c')
   })
 
   test('generates mermaid with subgraphs', () => {
@@ -178,8 +178,8 @@ describe('Graph - Mermaid Visualization', () => {
 
     const mermaid = g.toMermaid()
 
-    expect(mermaid).toContain('check -.->|conditional| END')
-    expect(mermaid).toContain('check -.->|conditional| process')
+    expect(mermaid).toContain('check -.-> END')
+    expect(mermaid).toContain('check -.-> process')
   })
 
   test('subgraphs getter returns registered subgraphs', () => {
