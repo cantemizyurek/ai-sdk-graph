@@ -1,6 +1,6 @@
 {
   "name": "ai-sdk-graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Graph-based workflows for the AI SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -18,9 +18,13 @@
   ],
   "scripts": {
     "test": "bun test",
-    "build": "bun build src/index.ts --outdir dist --target node --packages=external && tsc -p tsconfig.build.json"
+    "build": "bun build src/index.ts --outdir dist --target node --packages=external && tsc -p tsconfig.build.json",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.8",
     "@types/bun": "latest"
   },
   "peerDependencies": {
