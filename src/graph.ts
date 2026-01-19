@@ -446,10 +446,11 @@ export class Graph<
 export function graph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
->(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void } = {}) {
+>(options: { storage?: GraphSDK.GraphStorage<State, NodeKeys>, onFinish?: ({ state }: { state: State }) => Promise<void> | void } = {}, onStart?: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void) {
   return new Graph<State, NodeKeys>({
     storage: options.storage,
-    onFinish: options.onFinish
+    onFinish: options.onFinish,
+    onStart: onStart
   })
 }
 
