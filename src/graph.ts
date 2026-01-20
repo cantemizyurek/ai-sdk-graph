@@ -19,10 +19,6 @@ export class SuspenseError extends Error {
   }
 }
 
-type Writer = Parameters<
-  Parameters<typeof createUIMessageStream>[0]['execute']
->[0]['writer']
-
 export class Graph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
@@ -40,7 +36,7 @@ export class Graph<
   private readonly emitter = new NodeEventEmitter<NodeKeys>()
   private readonly stateManager = new StateManager<State>()
   private readonly onFinish: ({ state }: { state: State }) => Promise<void> | void
-  private readonly onStart: ({ state, writer }: { state: State, writer: Writer }) => Promise<void> | void
+  private readonly onStart: ({ state, writer }: { state: State, writer: GraphSDK.Writer }) => Promise<void> | void
 
   constructor(options: GraphSDK.GraphOptions<State, NodeKeys> = {}) {
     this.storage = options.storage ?? new InMemoryStorage()
@@ -58,7 +54,7 @@ export class Graph<
       update
     }: {
       state: () => Readonly<State>
-      writer: Writer
+      writer: GraphSDK.Writer
       suspense: (data?: unknown) => never
       update: (update: GraphSDK.StateUpdate<State>) => void
     }) => Promise<void> | void
@@ -153,7 +149,7 @@ export class Graph<
   async executeInternal(
     runId: string,
     initialState: State,
-    writer: Writer
+    writer: GraphSDK.Writer
   ): Promise<State> {
     const { context } = await this.createExecutionContext(runId, initialState, writer)
     await this.runExecutionLoopInternal(context)
@@ -174,7 +170,7 @@ export class Graph<
   private async createExecutionContext(
     runId: string,
     initialState: State | ((state: State | undefined) => State),
-    writer: Writer
+    writer: GraphSDK.Writer
   ): Promise<{ context: GraphSDK.ExecutionContext<State, NodeKeys>, firstTime: boolean }> {
     const { context, firstTime } = await this.restoreCheckpoint(runId, initialState, writer)
     return { context: { ...context, runId, writer }, firstTime }
@@ -253,7 +249,7 @@ export class Graph<
   private async restoreCheckpoint(
     runId: string,
     initialState: State | ((state: State | undefined) => State),
-    writer: Writer
+    writer: GraphSDK.Writer
   ): Promise<{ context: Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'>, firstTime: boolean }> {
     const checkpoint = await this.storage.load(runId)
 
@@ -283,7 +279,7 @@ export class Graph<
   private restoreFromCheckpoint(
     checkpoint: GraphSDK.Checkpoint<State, NodeKeys>,
     initialState: State | ((state: State | undefined) => State),
-    writer: Writer
+    writer: GraphSDK.Writer
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
     const state = this.stateManager.resolve(initialState, checkpoint.state, writer)
     return {
@@ -295,7 +291,7 @@ export class Graph<
 
   private createFreshExecution(
     initialState: State | ((state: State | undefined) => State),
-    writer: Writer
+    writer: GraphSDK.Writer
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
     const state = this.stateManager.resolve(initialState, undefined, writer)
     const startNode = this.nodeRegistry.get(BUILT_IN_NODES.START as NodeKeys)!
@@ -458,21 +454,21 @@ export function graph<
 }
 
 class NodeEventEmitter<NodeKeys extends string> {
-  emitStart(writer: Writer, nodeId: NodeKeys): void {
+  emitStart(writer: GraphSDK.Writer, nodeId: NodeKeys): void {
     writer.write({ type: 'data-node-start', data: nodeId })
   }
 
-  emitEnd(writer: Writer, nodeId: NodeKeys): void {
+  emitEnd(writer: GraphSDK.Writer, nodeId: NodeKeys): void {
     writer.write({ type: 'data-node-end', data: nodeId })
   }
 
-  emitSuspense(writer: Writer, nodeId: NodeKeys, data: unknown): void {
+  emitSuspense(writer: GraphSDK.Writer, nodeId: NodeKeys, data: unknown): void {
     writer.write({ type: 'data-node-suspense', data: { nodeId, data } })
   }
 }
 
 class StateManager<State extends Record<string, unknown>> {
-  apply(state: State, update: GraphSDK.StateUpdate<State>, writer: Writer): State {
+  apply(state: State, update: GraphSDK.StateUpdate<State>, writer: GraphSDK.Writer): State {
     const newState = {
       ...state,
       ...(typeof update === 'function' ? update(state) : update)
@@ -484,7 +480,7 @@ class StateManager<State extends Record<string, unknown>> {
   resolve(
     initialState: State | ((state: State | undefined) => State),
     existingState: State | undefined,
-    writer: Writer
+    writer: GraphSDK.Writer
   ): State {
     if (this.isStateFactory(initialState)) {
       const newState = initialState(existingState)

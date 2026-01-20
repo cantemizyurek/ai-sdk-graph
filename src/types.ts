@@ -1,4 +1,4 @@
-import type { UIMessageStreamWriter } from 'ai'
+import type { createUIMessageStream, UIMessageStreamWriter } from 'ai'
 
 export namespace GraphSDK {
   export type StateUpdate<State> = Partial<State> | ((state: State) => Partial<State>)
@@ -81,4 +81,8 @@ export namespace GraphSDK {
     onFinish?: (args: { state: State }) => Promise<void> | void
     onStart?: (args: { state: State; writer: UIMessageStreamWriter }) => Promise<void> | void
   }
+
+  export type Writer = Parameters<
+    Parameters<typeof createUIMessageStream>[0]['execute']
+  >[0]['writer']
 }
