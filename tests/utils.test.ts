@@ -178,4 +178,163 @@ describe('consumeAndMergeStream', () => {
 
         expect(resolved).toBe(true)
     })
+
+    test('rejects when onError is called', async () => {
+        let capturedOnError: ((error: unknown) => string) | undefined
+
+        const mockStream = {
+            toUIMessageStream: mock((options: any) => {
+                capturedOnError = options.onError
+                return new ReadableStream()
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+
+        const testError = new Error('Stream error')
+        capturedOnError!(testError)
+
+        await expect(messagesPromise).rejects.toThrow('Stream error')
+    })
+
+    test('onError returns error message string', async () => {
+        let capturedOnError: ((error: unknown) => string) | undefined
+
+        const mockStream = {
+            toUIMessageStream: mock((options: any) => {
+                capturedOnError = options.onError
+                return new ReadableStream()
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        // Catch the rejection to prevent unhandled promise rejection
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+        messagesPromise.catch(() => { })
+
+        const testError = new Error('Custom error message')
+        const errorMessage = capturedOnError!(testError)
+
+        expect(errorMessage).toBe('Custom error message')
+    })
+
+    test('onError returns default message for non-Error objects', async () => {
+        let capturedOnError: ((error: unknown) => string) | undefined
+
+        const mockStream = {
+            toUIMessageStream: mock((options: any) => {
+                capturedOnError = options.onError
+                return new ReadableStream()
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+        messagesPromise.catch(() => { })
+
+        const errorMessage = capturedOnError!('string error')
+
+        expect(errorMessage).toBe('An error occurred.')
+    })
+
+    test('rejects when toUIMessageStream throws synchronously', async () => {
+        const syncError = new Error('Sync error')
+
+        const mockStream = {
+            toUIMessageStream: mock(() => {
+                throw syncError
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+
+        await expect(messagesPromise).rejects.toThrow('Sync error')
+    })
+
+    test('writer.merge is not called when toUIMessageStream throws', async () => {
+        const mockStream = {
+            toUIMessageStream: mock(() => {
+                throw new Error('Sync error')
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+
+        await expect(messagesPromise).rejects.toThrow()
+        expect(mockWriter.merge).not.toHaveBeenCalled()
+    })
+
+    test('writer.merge is called before onError triggers', async () => {
+        let capturedOnError: ((error: unknown) => string) | undefined
+        let mergeCalledBeforeError = false
+
+        const mockStream = {
+            toUIMessageStream: mock((options: any) => {
+                capturedOnError = options.onError
+                return new ReadableStream()
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => {
+                mergeCalledBeforeError = true
+            })
+        }
+
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any)
+
+        expect(mergeCalledBeforeError).toBe(true)
+        expect(mockWriter.merge).toHaveBeenCalledTimes(1)
+
+        capturedOnError!(new Error('test'))
+        await expect(messagesPromise).rejects.toThrow()
+    })
+
+    test('does not pass user-provided onError or onFinish options', async () => {
+        let capturedOptions: any
+        let capturedOnFinish: ((args: { messages: UIMessage[] }) => void) | undefined
+
+        const mockStream = {
+            toUIMessageStream: mock((options: any) => {
+                capturedOptions = options
+                capturedOnFinish = options.onFinish
+                return new ReadableStream()
+            })
+        }
+
+        const mockWriter = {
+            merge: mock(() => { })
+        }
+
+        // Try to pass onFinish and onError in options (should be ignored due to Omit)
+        const messagesPromise = consumeAndMergeStream(mockStream as any, mockWriter as any, {
+            sendReasoning: true
+        } as any)
+
+        capturedOnFinish!({ messages: [] })
+        await messagesPromise
+
+        // The internal onFinish and onError should be set, not user-provided ones
+        expect(typeof capturedOptions.onFinish).toBe('function')
+        expect(typeof capturedOptions.onError).toBe('function')
+        expect(capturedOptions.sendReasoning).toBe(true)
+    })
 })

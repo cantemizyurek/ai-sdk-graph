@@ -9,3 +9,8 @@ A new helper function that simplifies consuming AI SDK streams within graph node
 ```ts
 const messages = await consumeAndMergeStream(stream, writer)
 ```
+
+The function includes proper error handling:
+- Rejects the promise when `onError` is triggered by the stream
+- Catches synchronous exceptions from `toUIMessageStream`
+- Returns appropriate error messages for the stream protocol
