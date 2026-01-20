@@ -1,7 +1,7 @@
-import type { StreamTextResult, ToolSet, UIMessage } from 'ai'
+import type { StreamTextResult, UIMessage } from 'ai'
 import type { GraphSDK } from './types'
 
-export async function consumeAndMergeStream<Stream extends StreamTextResult<ToolSet, any>>(
+export async function consumeAndMergeStream<Stream extends StreamTextResult<any, any>>(
     stream: Stream,
     writer: GraphSDK.Writer,
     options?: Omit<Parameters<Stream['toUIMessageStream']>[0], 'onFinish' | 'onError'>
