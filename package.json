@@ -1,6 +1,6 @@
 {
   "name": "ai-sdk-graph",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Graph-based workflows for the AI SDK",
   "type": "module",
   "main": "dist/index.js",

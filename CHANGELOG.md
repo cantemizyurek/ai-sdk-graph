@@ -1,5 +1,11 @@
 # ai-sdk-graph
 
+## 0.3.2
+
+### Patch Changes
+
+- bc03aee: Fix TypeScript type error in `consumeAndMergeStream` when using specific tool definitions. The function now accepts `StreamTextResult` with any tool configuration instead of requiring `ToolSet` compatibility.
+
 ## 0.3.1
 
 ### Patch Changes
