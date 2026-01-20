@@ -134,8 +134,12 @@ export class Graph<
     let context: GraphSDK.ExecutionContext<State, NodeKeys> | undefined
     return createUIMessageStream({
       execute: async ({ writer }) => {
-        context = await this.createExecutionContext(runId, initialState, writer)
-        await this.onStart({ state: context.state, writer })
+        const result = await this.createExecutionContext(runId, initialState, writer)
+        context = result.context
+        const firstTime = result.firstTime
+        if (firstTime) {
+          await this.onStart({ state: context.state, writer })
+        }
         await this.runExecutionLoop(context)
       },
       onFinish: async () => {
@@ -151,7 +155,7 @@ export class Graph<
     initialState: State,
     writer: Writer
   ): Promise<State> {
-    const context = await this.createExecutionContext(runId, initialState, writer)
+    const { context } = await this.createExecutionContext(runId, initialState, writer)
     await this.runExecutionLoopInternal(context)
     return context.state
   }
@@ -171,9 +175,9 @@ export class Graph<
     runId: string,
     initialState: State | ((state: State | undefined) => State),
     writer: Writer
-  ): Promise<GraphSDK.ExecutionContext<State, NodeKeys>> {
-    const restored = await this.restoreCheckpoint(runId, initialState)
-    return { runId, writer, ...restored }
+  ): Promise<{ context: GraphSDK.ExecutionContext<State, NodeKeys>, firstTime: boolean }> {
+    const { context, firstTime } = await this.restoreCheckpoint(runId, initialState)
+    return { context: { ...context, runId, writer }, firstTime }
   }
 
   private async runExecutionLoop(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
@@ -249,14 +253,14 @@ export class Graph<
   private async restoreCheckpoint(
     runId: string,
     initialState: State | ((state: State | undefined) => State)
-  ): Promise<Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'>> {
+  ): Promise<{ context: Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'>, firstTime: boolean }> {
     const checkpoint = await this.storage.load(runId)
 
     if (this.isValidCheckpoint(checkpoint)) {
-      return this.restoreFromCheckpoint(checkpoint, initialState)
+      return { context: this.restoreFromCheckpoint(checkpoint, initialState), firstTime: false }
     }
 
-    return this.createFreshExecution(initialState)
+    return { context: this.createFreshExecution(initialState), firstTime: true }
   }
 
   private isValidCheckpoint(
