@@ -1,5 +1,11 @@
 # ai-sdk-graph
 
+## 0.3.1
+
+### Patch Changes
+
+- aed6eea: Export utils module from the main package entry point
+
 ## 0.3.0
 
 ### Minor Changes
