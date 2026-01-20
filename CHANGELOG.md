@@ -1,5 +1,22 @@
 # ai-sdk-graph
 
+## 0.3.0
+
+### Minor Changes
+
+- edc587c: Add `consumeAndMergeStream` utility function
+
+  A new helper function that simplifies consuming AI SDK streams within graph nodes. It merges the stream into the writer and returns a promise that resolves with the final messages when the stream completes.
+
+  ```ts
+  const messages = await consumeAndMergeStream(stream, writer)
+  ```
+
+  The function includes proper error handling:
+  - Rejects the promise when `onError` is triggered by the stream
+  - Catches synchronous exceptions from `toUIMessageStream`
+  - Returns appropriate error messages for the stream protocol
+
 ## 0.2.0
 
 ### Minor Changes
