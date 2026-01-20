@@ -1372,3 +1372,362 @@ describe('Graph - onStart callback', () => {
     expect(onStartCallCount).toBe(1)
   })
 })
+
+describe('Graph - State Streaming via data-state events', () => {
+  test('emits data-state event on initial state resolution', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>()
+      .node('a', () => { })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    const stream = g.execute('run-1', { value: 42 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    expect(stateEvents.length).toBeGreaterThanOrEqual(1)
+    expect((stateEvents[0]?.data as any).value).toBe(42)
+  })
+
+  test('emits data-state event when state is updated via update()', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>()
+      .node('modifier', ({ update }) => {
+        update({ value: 100 })
+      })
+      .edge('START', 'modifier')
+      .edge('modifier', 'END')
+
+    const stream = g.execute('run-1', { value: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    // At least 2 events: initial state + update
+    expect(stateEvents.length).toBeGreaterThanOrEqual(2)
+
+    // Find the event with value 100 (from update)
+    const updateEvent = stateEvents.find((e) => (e.data as any).value === 100)
+    expect(updateEvent).toBeDefined()
+  })
+
+  test('emits data-state event for each state update in sequence', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ count: number }>()
+      .node('increment1', ({ update }) => {
+        update({ count: 1 })
+      })
+      .node('increment2', ({ update }) => {
+        update({ count: 2 })
+      })
+      .node('increment3', ({ update }) => {
+        update({ count: 3 })
+      })
+      .edge('START', 'increment1')
+      .edge('increment1', 'increment2')
+      .edge('increment2', 'increment3')
+      .edge('increment3', 'END')
+
+    const stream = g.execute('run-1', { count: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    const stateValues = stateEvents.map((e) => (e.data as any).count)
+
+    // Should have initial (0) + 3 updates (1, 2, 3)
+    expect(stateValues).toContain(0)
+    expect(stateValues).toContain(1)
+    expect(stateValues).toContain(2)
+    expect(stateValues).toContain(3)
+  })
+
+  test('emits data-state event when state is updated with function updater', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ count: number }>()
+      .node('doubler', ({ update }) => {
+        update((state) => ({ count: state.count * 2 }))
+      })
+      .edge('START', 'doubler')
+      .edge('doubler', 'END')
+
+    const stream = g.execute('run-1', { count: 5 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    const stateValues = stateEvents.map((e) => (e.data as any).count)
+
+    expect(stateValues).toContain(5)  // initial
+    expect(stateValues).toContain(10) // after doubling
+  })
+
+  test('emits data-state event when resuming from checkpoint with state factory', async () => {
+    const storage = new InMemoryStorage<{ value: number }, string>()
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>({ storage: storage as any })
+      .node('suspender', ({ state, suspense }) => {
+        if (state().value < 100) {
+          suspense()
+        }
+      })
+      .edge('START', 'suspender')
+      .edge('suspender', 'END')
+
+    // First execution - suspend
+    await runGraph(g.execute('run-1', { value: 50 }))
+
+    // Resume with state factory
+    const stream = g.execute('run-1', (existing) => ({
+      value: (existing?.value ?? 0) + 100
+    }))
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    // Should emit state event with resolved state (50 + 100 = 150)
+    const resolvedStateEvent = stateEvents.find((e) => (e.data as any).value === 150)
+    expect(resolvedStateEvent).toBeDefined()
+  })
+
+  test('emits data-state event when restoring from checkpoint with existing state', async () => {
+    const storage = new InMemoryStorage<{ value: number }, string>()
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>({ storage: storage as any })
+      .node('suspender', ({ state, suspense }) => {
+        if (state().value < 100) {
+          suspense()
+        }
+      })
+      .edge('START', 'suspender')
+      .edge('suspender', 'END')
+
+    // First execution - suspend with value 75
+    await runGraph(g.execute('run-1', { value: 75 }))
+
+    // Resume with plain object (checkpoint state should be used)
+    const stream = g.execute('run-1', { value: 999 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+    // Should emit state event with checkpoint state (75), not the new initial (999)
+    const checkpointStateEvent = stateEvents.find((e) => (e.data as any).value === 75)
+    expect(checkpointStateEvent).toBeDefined()
+  })
+
+  test('emits data-state event in subgraph execution', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    type ChildState = { childValue: number }
+    type ParentState = { parentValue: number; result?: number }
+
+    const childGraph = graph<ChildState>()
+      .node('childModifier', ({ update }) => {
+        update({ childValue: 200 })
+      })
+      .edge('START', 'childModifier')
+      .edge('childModifier', 'END')
+
+    const parentGraph = graph<ParentState>()
+      .node('parentModifier', ({ update }) => {
+        update({ parentValue: 100 })
+      })
+      .graph('child', childGraph, {
+        input: () => ({ childValue: 0 }),
+        output: (childState) => ({ result: childState.childValue })
+      })
+      .edge('START', 'parentModifier')
+      .edge('parentModifier', 'child')
+      .edge('child', 'END')
+
+    const stream = parentGraph.execute('run-1', { parentValue: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+
+    // Should have state events for parent state changes
+    const parentInitialEvent = stateEvents.find((e) => (e.data as any).parentValue === 0)
+    const parentUpdateEvent = stateEvents.find((e) => (e.data as any).parentValue === 100)
+    const parentResultEvent = stateEvents.find((e) => (e.data as any).result === 200)
+
+    expect(parentInitialEvent).toBeDefined()
+    expect(parentUpdateEvent).toBeDefined()
+    expect(parentResultEvent).toBeDefined()
+  })
+
+  test('data-state events reflect complete state object', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ a: number; b: string; c: boolean }>()
+      .node('updateA', ({ update }) => {
+        update({ a: 10 })
+      })
+      .node('updateB', ({ update }) => {
+        update({ b: 'updated' })
+      })
+      .edge('START', 'updateA')
+      .edge('updateA', 'updateB')
+      .edge('updateB', 'END')
+
+    const stream = g.execute('run-1', { a: 0, b: 'initial', c: true })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+
+    // Each state event should contain the complete state object
+    for (const event of stateEvents) {
+      const data = event.data as { a: number; b: string; c: boolean }
+      expect(data).toHaveProperty('a')
+      expect(data).toHaveProperty('b')
+      expect(data).toHaveProperty('c')
+    }
+
+    // Find the final state event (after updateB)
+    const finalStateEvent = stateEvents.find(
+      (e) => (e.data as any).a === 10 && (e.data as any).b === 'updated'
+    )
+    expect(finalStateEvent).toBeDefined()
+    expect((finalStateEvent?.data as any).c).toBe(true) // unchanged property preserved
+  })
+
+  test('data-state events are emitted before node-end events', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>()
+      .node('modifier', ({ update }) => {
+        update({ value: 42 })
+      })
+      .edge('START', 'modifier')
+      .edge('modifier', 'END')
+
+    const stream = g.execute('run-1', { value: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    // Find the state update event with value 42
+    const stateUpdateIndex = events.findIndex(
+      (e) => e.type === 'data-state' && (e.data as any).value === 42
+    )
+
+    // Find the node-end event for 'modifier' (data is the nodeId directly)
+    const nodeEndIndex = events.findIndex(
+      (e) => e.type === 'data-node-end' && e.data === 'modifier'
+    )
+
+    // State update should come before node end
+    expect(stateUpdateIndex).toBeLessThan(nodeEndIndex)
+  })
+
+  test('parallel nodes emit data-state events for their updates', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ a: number; b: number }>()
+      .node('fork', () => { })
+      .node('updateA', ({ update }) => {
+        update({ a: 100 })
+      })
+      .node('updateB', ({ update }) => {
+        update({ b: 200 })
+      })
+      .node('join', () => { })
+      .edge('START', 'fork')
+      .edge('fork', 'updateA')
+      .edge('fork', 'updateB')
+      .edge('updateA', 'join')
+      .edge('updateB', 'join')
+      .edge('join', 'END')
+
+    const stream = g.execute('run-1', { a: 0, b: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const stateEvents = events.filter((e) => e.type === 'data-state')
+
+    // Should have state events for both parallel updates
+    const hasAUpdate = stateEvents.some((e) => (e.data as any).a === 100)
+    const hasBUpdate = stateEvents.some((e) => (e.data as any).b === 200)
+
+    expect(hasAUpdate).toBe(true)
+    expect(hasBUpdate).toBe(true)
+  })
+})

@@ -176,7 +176,7 @@ export class Graph<
     initialState: State | ((state: State | undefined) => State),
     writer: Writer
   ): Promise<{ context: GraphSDK.ExecutionContext<State, NodeKeys>, firstTime: boolean }> {
-    const { context, firstTime } = await this.restoreCheckpoint(runId, initialState)
+    const { context, firstTime } = await this.restoreCheckpoint(runId, initialState, writer)
     return { context: { ...context, runId, writer }, firstTime }
   }
 
@@ -252,15 +252,16 @@ export class Graph<
 
   private async restoreCheckpoint(
     runId: string,
-    initialState: State | ((state: State | undefined) => State)
+    initialState: State | ((state: State | undefined) => State),
+    writer: Writer
   ): Promise<{ context: Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'>, firstTime: boolean }> {
     const checkpoint = await this.storage.load(runId)
 
     if (this.isValidCheckpoint(checkpoint)) {
-      return { context: this.restoreFromCheckpoint(checkpoint, initialState), firstTime: false }
+      return { context: this.restoreFromCheckpoint(checkpoint, initialState, writer), firstTime: false }
     }
 
-    return { context: this.createFreshExecution(initialState), firstTime: true }
+    return { context: this.createFreshExecution(initialState, writer), firstTime: true }
   }
 
   private isValidCheckpoint(
@@ -281,9 +282,10 @@ export class Graph<
 
   private restoreFromCheckpoint(
     checkpoint: GraphSDK.Checkpoint<State, NodeKeys>,
-    initialState: State | ((state: State | undefined) => State)
+    initialState: State | ((state: State | undefined) => State),
+    writer: Writer
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.stateManager.resolve(initialState, checkpoint.state)
+    const state = this.stateManager.resolve(initialState, checkpoint.state, writer)
     return {
       state,
       currentNodes: this.resolveNodeIds(checkpoint.nodeIds),
@@ -292,9 +294,10 @@ export class Graph<
   }
 
   private createFreshExecution(
-    initialState: State | ((state: State | undefined) => State)
+    initialState: State | ((state: State | undefined) => State),
+    writer: Writer
   ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.stateManager.resolve(initialState, undefined)
+    const state = this.stateManager.resolve(initialState, undefined, writer)
     const startNode = this.nodeRegistry.get(BUILT_IN_NODES.START as NodeKeys)!
     return {
       state,
@@ -354,7 +357,7 @@ export class Graph<
       writer: context.writer,
       suspense: this.createSuspenseFunction(),
       update: (update: GraphSDK.StateUpdate<State>) => {
-        context.state = this.stateManager.apply(context.state, update)
+        context.state = this.stateManager.apply(context.state, update, context.writer)
       }
     }
   }
@@ -378,7 +381,7 @@ export class Graph<
       )
 
       const parentUpdate = options.output(childFinalState, context.state)
-      context.state = this.stateManager.apply(context.state, parentUpdate)
+      context.state = this.stateManager.apply(context.state, parentUpdate, context.writer)
 
       this.emitter.emitEnd(context.writer, node.id)
       return null
@@ -469,21 +472,28 @@ class NodeEventEmitter<NodeKeys extends string> {
 }
 
 class StateManager<State extends Record<string, unknown>> {
-  apply(state: State, update: GraphSDK.StateUpdate<State>): State {
-    return {
+  apply(state: State, update: GraphSDK.StateUpdate<State>, writer: Writer): State {
+    const newState = {
       ...state,
       ...(typeof update === 'function' ? update(state) : update)
     }
+    writer.write({ type: 'data-state', data: newState })
+    return newState
   }
 
   resolve(
     initialState: State | ((state: State | undefined) => State),
-    existingState: State | undefined
+    existingState: State | undefined,
+    writer: Writer
   ): State {
     if (this.isStateFactory(initialState)) {
-      return initialState(existingState)
+      const newState = initialState(existingState)
+      writer.write({ type: 'data-state', data: newState })
+      return newState
     }
-    return existingState ?? initialState
+    const newState = existingState ?? initialState
+    writer.write({ type: 'data-state', data: newState })
+    return newState
   }
 
   private isStateFactory(
