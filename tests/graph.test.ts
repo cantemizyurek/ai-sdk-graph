@@ -290,7 +290,7 @@ describe('Graph - Checkpointing', () => {
     const storage = new InMemoryStorage<{ value: number }, string>()
 
     const g = graph<{ value: number }>({ storage: storage as any })
-      .node('a', () => {})
+      .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
@@ -527,8 +527,8 @@ describe('Graph - Subgraph', () => {
 describe('Graph - API', () => {
   test('nodes getter returns registered nodes', () => {
     const g = graph<{ value: number }>()
-      .node('a', () => {})
-      .node('b', () => {})
+      .node('a', () => { })
+      .node('b', () => { })
 
     const nodes = g.nodes
 
@@ -540,8 +540,8 @@ describe('Graph - API', () => {
 
   test('edges getter returns registered edges', () => {
     const g = graph<{ value: number }>()
-      .node('a', () => {})
-      .node('b', () => {})
+      .node('a', () => { })
+      .node('b', () => { })
       .edge('START', 'a')
       .edge('a', 'b')
       .edge('b', 'END')
@@ -575,9 +575,9 @@ describe('Graph - Edge Cases', () => {
     let joinExecutionCount = 0
 
     const g = graph<{ value: number }>()
-      .node('fork', () => {})
-      .node('pathA', () => {})
-      .node('pathB', () => {})
+      .node('fork', () => { })
+      .node('pathA', () => { })
+      .node('pathB', () => { })
       .node('join', () => { joinExecutionCount++ })
       .edge('START', 'fork')
       .edge('fork', 'pathA')
@@ -595,7 +595,7 @@ describe('Graph - Edge Cases', () => {
     let finalState: { a: number; b: number } | undefined
 
     const g = graph<{ a: number; b: number }>()
-      .node('fork', () => {})
+      .node('fork', () => { })
       .node('updateA', ({ update }) => {
         update({ a: 100 })
       })
@@ -830,8 +830,8 @@ describe('Graph - Writer Event Emissions', () => {
     const events: Array<{ type: string; data: unknown }> = []
 
     const g = graph<{ value: number }>()
-      .node('a', () => {})
-      .node('b', () => {})
+      .node('a', () => { })
+      .node('b', () => { })
       .edge('START', 'a')
       .edge('a', 'b')
       .edge('b', 'END')
@@ -1023,7 +1023,7 @@ describe('Graph - executeInternal', () => {
 
     try {
       await g.executeInternal('run-1', { callCount: 0 }, mockWriter as any)
-    } catch (e) {}
+    } catch (e) { }
 
     expect(executionOrder).toEqual(['conditional:0'])
 
@@ -1115,5 +1115,260 @@ describe('Graph - Checkpoint Persistence Across Batches', () => {
 
     const finalCheckpoint = await storage.load('run-1')
     expect(finalCheckpoint?.state.step).toBe(2)
+  })
+})
+
+describe('Graph - onFinish callback', () => {
+  test('onFinish is called with final state after graph completes', async () => {
+    let onFinishCalled = false
+    let receivedState: { value: number } | undefined
+
+    const g = graph<{ value: number }>({
+      onFinish: ({ state }) => {
+        onFinishCalled = true
+        receivedState = state
+      }
+    })
+      .node('modifier', ({ update }) => {
+        update({ value: 42 })
+      })
+      .edge('START', 'modifier')
+      .edge('modifier', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    expect(onFinishCalled).toBe(true)
+    expect(receivedState?.value).toBe(42)
+  })
+
+  test('onFinish is called even for empty graph (START → END)', async () => {
+    let onFinishCalled = false
+
+    const g = graph<{ value: number }>({
+      onFinish: () => {
+        onFinishCalled = true
+      }
+    })
+      .edge('START', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    expect(onFinishCalled).toBe(true)
+  })
+
+  test('onFinish is called even when graph suspends', async () => {
+    let onFinishCalled = false
+    let receivedState: { value: number } | undefined
+
+    const g = graph<{ value: number }>({
+      onFinish: ({ state }) => {
+        onFinishCalled = true
+        receivedState = state
+      }
+    })
+      .node('suspender', ({ suspense, update }) => {
+        update({ value: 42 })
+        suspense()
+      })
+      .edge('START', 'suspender')
+      .edge('suspender', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    // onFinish is called when the stream completes, even if graph suspended
+    expect(onFinishCalled).toBe(true)
+    // State should reflect the updates made before suspense
+    expect(receivedState?.value).toBe(42)
+  })
+
+  test('onFinish async callback is awaited', async () => {
+    let asyncWorkCompleted = false
+
+    const g = graph<{ value: number }>({
+      onFinish: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        asyncWorkCompleted = true
+      }
+    })
+      .node('a', () => { })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    expect(asyncWorkCompleted).toBe(true)
+  })
+})
+
+describe('Graph - onStart callback', () => {
+  test('onStart is called with initial state on first execution', async () => {
+    let onStartCalled = false
+    let receivedState: { value: number } | undefined
+
+    const g = graph<{ value: number }>({
+      onStart: ({ state }) => {
+        onStartCalled = true
+        receivedState = state
+      }
+    })
+      .node('a', () => { })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    await runGraph(g.execute('run-1', { value: 100 }))
+
+    expect(onStartCalled).toBe(true)
+    expect(receivedState?.value).toBe(100)
+  })
+
+  test('onStart is NOT called when resuming from checkpoint', async () => {
+    const storage = new InMemoryStorage<{ value: number }, string>()
+    let onStartCallCount = 0
+
+    const g = graph<{ value: number }>({
+      storage: storage as any,
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+      .node('suspendable', ({ state, suspense }) => {
+        if (state().value < 10) {
+          suspense()
+        }
+      })
+      .edge('START', 'suspendable')
+      .edge('suspendable', 'END')
+
+    // First execution - should call onStart
+    await runGraph(g.execute('run-1', { value: 5 }))
+    expect(onStartCallCount).toBe(1)
+
+    // Resume from checkpoint - should NOT call onStart again
+    await runGraph(g.execute('run-1', (state) => ({ ...state, value: 20 })))
+    expect(onStartCallCount).toBe(1) // Still 1, not 2
+  })
+
+  test('onStart is called for each new runId', async () => {
+    let onStartCallCount = 0
+
+    const g = graph<{ value: number }>({
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+      .node('a', () => { })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.execute('run-2', { value: 0 }))
+    await runGraph(g.execute('run-3', { value: 0 }))
+
+    expect(onStartCallCount).toBe(3)
+  })
+
+  test('onStart has access to writer', async () => {
+    const events: Array<{ type: string; data: unknown }> = []
+
+    const g = graph<{ value: number }>({
+      onStart: ({ writer }) => {
+        writer.write({ type: 'data-custom', data: { source: 'onStart' } })
+      }
+    })
+      .node('a', () => { })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    const stream = g.execute('run-1', { value: 0 })
+    const reader = stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && typeof value === 'object' && 'type' in value) {
+        events.push(value as { type: string; data: unknown })
+      }
+    }
+
+    const customEvent = events.find((e) => e.type === 'data-custom')
+    expect(customEvent).toBeDefined()
+    expect((customEvent?.data as any).source).toBe('onStart')
+  })
+
+  test('onStart async callback is awaited before graph execution', async () => {
+    const executionOrder: string[] = []
+
+    const g = graph<{ value: number }>({
+      onStart: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        executionOrder.push('onStart')
+      }
+    })
+      .node('a', () => {
+        executionOrder.push('node-a')
+      })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    expect(executionOrder).toEqual(['onStart', 'node-a'])
+  })
+
+  test('onStart and onFinish both work together', async () => {
+    const callOrder: string[] = []
+
+    const g = graph<{ value: number }>({
+      onStart: () => {
+        callOrder.push('onStart')
+      },
+      onFinish: () => {
+        callOrder.push('onFinish')
+      }
+    })
+      .node('a', () => {
+        callOrder.push('node-a')
+      })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    await runGraph(g.execute('run-1', { value: 0 }))
+
+    expect(callOrder).toEqual(['onStart', 'node-a', 'onFinish'])
+  })
+
+  test('multiple suspend/resume cycles only call onStart once', async () => {
+    const storage = new InMemoryStorage<{ attempts: number }, string>()
+    let onStartCallCount = 0
+
+    const g = graph<{ attempts: number }>({
+      storage: storage as any,
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+      .node('retry', ({ state, suspense }) => {
+        if (state().attempts < 3) {
+          suspense()
+        }
+      })
+      .edge('START', 'retry')
+      .edge('retry', 'END')
+
+    // Initial execution
+    await runGraph(g.execute('run-1', { attempts: 0 }))
+    expect(onStartCallCount).toBe(1)
+
+    // Resume 1
+    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 1 })))
+    expect(onStartCallCount).toBe(1)
+
+    // Resume 2
+    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 2 })))
+    expect(onStartCallCount).toBe(1)
+
+    // Resume 3 (completes)
+    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 3 })))
+    expect(onStartCallCount).toBe(1)
   })
 })
