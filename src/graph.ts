@@ -134,7 +134,9 @@ export class Graph<
     let context: GraphSDK.ExecutionContext<State, NodeKeys> | undefined
     return createUIMessageStream({
       execute: async ({ writer }) => {
-        const { context, firstTime } = await this.createExecutionContext(runId, initialState, writer)
+        const result = await this.createExecutionContext(runId, initialState, writer)
+        context = result.context
+        const firstTime = result.firstTime
         if (firstTime) {
           await this.onStart({ state: context.state, writer })
         }
