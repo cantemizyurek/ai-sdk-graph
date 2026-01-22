@@ -11,6 +11,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.js"
     }
   },
   "files": [
@@ -18,21 +23,34 @@
   ],
   "scripts": {
     "test": "bun test",
-    "build": "bun build src/index.ts --outdir dist --target node --packages=external && tsc -p tsconfig.build.json",
+    "build": "bun build src/index.ts src/react.ts --outdir dist --target node --packages=external && tsc -p tsconfig.build.json",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "bun run build && changeset publish"
   },
   "devDependencies": {
+    "@ai-sdk/react": "^3.0.50",
     "@changesets/cli": "^2.29.8",
     "@types/bun": "latest",
-    "prettier": "^3.8.0"
+    "@types/react": "^19.2.9",
+    "prettier": "^3.8.0",
+    "react": "^19.0.0"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5",
+    "react": "^18 || ^19",
+    "@ai-sdk/react": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "@ai-sdk/react": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "ai": "^6.0.37",
+    "ai": "^6.0.48",
     "ioredis": "^5.9.2"
   }
 }
