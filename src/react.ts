@@ -59,16 +59,16 @@ export function useGraphChat<
                 onStateChange?.(newState)
             } else if (dataPart.type === 'data-node-start') {
                 const nodeId = dataPart.data as string
-                setActiveNodes([...activeNodes, nodeId])
+                setActiveNodes((prev) => [...prev, nodeId])
                 onNodeStart?.(nodeId)
             } else if (dataPart.type === 'data-node-end') {
                 const nodeId = dataPart.data as string
-                setActiveNodes(activeNodes.filter(node => node !== nodeId))
+                setActiveNodes((prev) => prev.filter(node => node !== nodeId))
                 onNodeEnd?.(nodeId)
             } else if (dataPart.type === 'data-node-suspense') {
                 const { nodeId, data } = dataPart.data as { nodeId: string; data: unknown }
                 onNodeSuspense?.(nodeId, data)
-
+                setActiveNodes([])
             }
         },
         [onStateChange, onNodeStart, onNodeEnd, onNodeSuspense]
