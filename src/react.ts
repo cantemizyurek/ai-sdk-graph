@@ -102,7 +102,7 @@ export function useGraphChat<
         ...chatInitOptions,
         transport,
         onData: handleData,
-    } as UseChatOptions<UI_MESSAGE>)
+    })
 
     return {
         ...chatHelpers,
