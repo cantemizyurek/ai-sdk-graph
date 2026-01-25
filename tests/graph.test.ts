@@ -277,7 +277,7 @@ describe('Graph - Suspense & Resume', () => {
 
 describe('Graph - Checkpointing', () => {
   test('checkpoint is saved on suspense', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
     const g = graph<{ value: number }>()
       .node('a', ({ suspense }) => {
@@ -286,7 +286,7 @@ describe('Graph - Checkpointing', () => {
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { value: 42 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 42 }))
 
     const checkpoint = await storage.load('run-1')
     expect(checkpoint).not.toBeNull()
@@ -295,21 +295,21 @@ describe('Graph - Checkpointing', () => {
   })
 
   test('checkpoint is deleted on completion', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
     const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { value: 42 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 42 }))
 
     const checkpoint = await storage.load('run-1')
     expect(checkpoint).toBeNull()
   })
 
   test('different runIds have separate checkpoints', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
     const g = graph<{ value: number }>()
       .node('a', ({ state, suspense }) => {
@@ -318,7 +318,7 @@ describe('Graph - Checkpointing', () => {
       .edge('START', 'a')
       .edge('a', 'END')
 
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     await runGraph(compiled.execute('run-1', { value: 10 }))
     await runGraph(compiled.execute('run-2', { value: 20 }))
@@ -651,7 +651,7 @@ describe('Graph - Edge Cases', () => {
   })
 
   test('multiple parallel nodes can suspend', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'fork' | 'suspendA' | 'suspendB' | 'join'>()
     const executionOrder: string[] = []
 
     const g = graph<{ value: number }>()
@@ -672,7 +672,7 @@ describe('Graph - Edge Cases', () => {
       .edge('suspendB', 'join')
       .edge('join', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toContain('fork')
     expect(executionOrder).toContain('suspendA')
@@ -735,7 +735,7 @@ describe('Graph - SuspenseError', () => {
 
 describe('Graph - Checkpoint Edge Cases', () => {
   test('checkpoint with empty nodeIds starts fresh execution', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
     await storage.save('run-1', {
       state: { value: 999 },
       nodeIds: [],
@@ -748,13 +748,13 @@ describe('Graph - Checkpoint Edge Cases', () => {
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toContain('a')
   })
 
   test('checkpoint with non-existent node IDs terminates without execution', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'real' | 'nonexistent1' | 'nonexistent2'>()
     await storage.save('run-1', {
       state: { value: 10 },
       nodeIds: ['nonexistent1', 'nonexistent2'],
@@ -767,13 +767,13 @@ describe('Graph - Checkpoint Edge Cases', () => {
       .edge('START', 'real')
       .edge('real', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual([])
   })
 
   test('initial state function receives checkpoint state when resuming', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     let callCount = 0
     let receivedExisting: { value: number } | undefined
 
@@ -787,7 +787,7 @@ describe('Graph - Checkpoint Edge Cases', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     await runGraph(compiled.execute('run-1', { value: 100 }))
 
@@ -1014,7 +1014,7 @@ describe('Graph - executeInternal', () => {
   })
 
   test('executeInternal can resume after suspense', async () => {
-    const storage = new InMemoryStorage<{ callCount: number }, string>()
+    const storage = new InMemoryStorage<{ callCount: number }, 'START' | 'END' | 'conditional' | 'after'>()
     const executionOrder: string[] = []
 
     const g = graph<{ callCount: number }>()
@@ -1034,7 +1034,7 @@ describe('Graph - executeInternal', () => {
       .edge('after', 'END')
 
     const mockWriter = { write: jest.fn() }
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     try {
       await compiled.executeInternal('run-1', { callCount: 0 }, mockWriter as any)
@@ -1057,7 +1057,7 @@ describe('Graph - executeInternal', () => {
 
 describe('Graph - Concurrent Executions', () => {
   test('multiple executions with same storage are isolated', async () => {
-    const storage = new InMemoryStorage<{ id: string }, string>()
+    const storage = new InMemoryStorage<{ id: string }, 'START' | 'END' | 'suspender'>()
 
     const g = graph<{ id: string }>()
       .node('suspender', ({ state, suspense }) => {
@@ -1068,7 +1068,7 @@ describe('Graph - Concurrent Executions', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     await Promise.all([
       runGraph(compiled.execute('run-1', { id: 'suspend-me' })),
@@ -1114,7 +1114,7 @@ describe('Graph - Writer Usage in Nodes', () => {
 
 describe('Graph - Checkpoint Persistence Across Batches', () => {
   test('state is persisted after each batch execution', async () => {
-    const storage = new InMemoryStorage<{ step: number }, string>()
+    const storage = new InMemoryStorage<{ step: number }, 'START' | 'END' | 'step1' | 'step2'>()
 
     const g = graph<{ step: number }>()
       .node('step1', ({ update }) => {
@@ -1128,7 +1128,7 @@ describe('Graph - Checkpoint Persistence Across Batches', () => {
       .edge('step1', 'step2')
       .edge('step2', 'END')
 
-    await runGraph(g.compile({ storage: storage as any }).execute('run-1', { step: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { step: 0 }))
 
     const finalCheckpoint = await storage.load('run-1')
     expect(finalCheckpoint?.state.step).toBe(2)
@@ -1239,7 +1239,7 @@ describe('Graph - onStart callback', () => {
   })
 
   test('onStart is NOT called when resuming from checkpoint', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspendable'>()
     let onStartCallCount = 0
 
     const g = graph<{ value: number }>()
@@ -1252,7 +1252,7 @@ describe('Graph - onStart callback', () => {
       .edge('suspendable', 'END')
 
     const compiled = g.compile({
-      storage: storage as any,
+      storage,
       onStart: () => {
         onStartCallCount++
       }
@@ -1359,7 +1359,7 @@ describe('Graph - onStart callback', () => {
   })
 
   test('multiple suspend/resume cycles only call onStart once', async () => {
-    const storage = new InMemoryStorage<{ attempts: number }, string>()
+    const storage = new InMemoryStorage<{ attempts: number }, 'START' | 'END' | 'retry'>()
     let onStartCallCount = 0
 
     const g = graph<{ attempts: number }>()
@@ -1372,7 +1372,7 @@ describe('Graph - onStart callback', () => {
       .edge('retry', 'END')
 
     const compiled = g.compile({
-      storage: storage as any,
+      storage,
       onStart: () => {
         onStartCallCount++
       }
@@ -1519,7 +1519,7 @@ describe('Graph - State Streaming via data-state events', () => {
   })
 
   test('emits data-state event when resuming from checkpoint with state factory', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     const events: Array<{ type: string; data: unknown }> = []
 
     const g = graph<{ value: number }>()
@@ -1531,7 +1531,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     // First execution - suspend
     await runGraph(compiled.execute('run-1', { value: 50 }))
@@ -1557,7 +1557,7 @@ describe('Graph - State Streaming via data-state events', () => {
   })
 
   test('emits data-state event when restoring from checkpoint with existing state', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     const events: Array<{ type: string; data: unknown }> = []
 
     const g = graph<{ value: number }>()
@@ -1569,7 +1569,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    const compiled = g.compile({ storage: storage as any })
+    const compiled = g.compile({ storage })
 
     // First execution - suspend with value 75
     await runGraph(compiled.execute('run-1', { value: 75 }))
