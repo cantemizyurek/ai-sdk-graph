@@ -29,7 +29,7 @@ describe('Graph - Basic Execution', () => {
       .edge('b', 'c')
       .edge('c', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual(['a', 'b', 'c'])
   })
@@ -38,7 +38,7 @@ describe('Graph - Basic Execution', () => {
     const g = graph<{ value: number }>()
       .edge('START', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
   })
 
 })
@@ -62,7 +62,7 @@ describe('Graph - State Management', () => {
       .edge('updateB', 'readState')
       .edge('readState', 'END')
 
-    await runGraph(g.execute('run-1', { a: 0, b: 0 }))
+    await runGraph(g.compile().execute('run-1', { a: 0, b: 0 }))
 
     expect(finalState).toEqual({ a: 10, b: 20 })
   })
@@ -85,7 +85,7 @@ describe('Graph - State Management', () => {
       .edge('double', 'readState')
       .edge('readState', 'END')
 
-    await runGraph(g.execute('run-1', { count: 5 }))
+    await runGraph(g.compile().execute('run-1', { count: 5 }))
 
     expect(finalState).toEqual({ count: 12 })
   })
@@ -106,7 +106,7 @@ describe('Graph - State Management', () => {
       .edge('a', 'b')
       .edge('b', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(stateSnapshots).toEqual([0, 10, 10])
   })
@@ -125,11 +125,13 @@ describe('Graph - Edge Routing', () => {
       .edge('left', 'END')
       .edge('right', 'END')
 
-    await runGraph(g.execute('run-left', { path: 'left' }))
+    const compiled = g.compile()
+
+    await runGraph(compiled.execute('run-left', { path: 'left' }))
     expect(executionOrder).toEqual(['router', 'left'])
 
     executionOrder.length = 0
-    await runGraph(g.execute('run-right', { path: 'right' }))
+    await runGraph(compiled.execute('run-right', { path: 'right' }))
     expect(executionOrder).toEqual(['router', 'right'])
   })
 
@@ -148,7 +150,7 @@ describe('Graph - Edge Routing', () => {
       .edge('b', 'END')
       .edge('c', 'END')
 
-    await runGraph(g.execute('run-1', { goToB: false }))
+    await runGraph(g.compile().execute('run-1', { goToB: false }))
 
     expect(executionOrder).toEqual(['a', 'b'])
   })
@@ -181,7 +183,7 @@ describe('Graph - Edge Routing', () => {
       .edge('parallel2', 'join')
       .edge('join', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     const time1 = startTimes['parallel1'] ?? 0
     const time2 = startTimes['parallel2'] ?? 0
@@ -211,11 +213,13 @@ describe('Graph - Suspense & Resume', () => {
       .edge('suspendable', 'after')
       .edge('after', 'END')
 
-    await runGraph(g.execute('run-1', { shouldSuspend: true }))
+    const compiled = g.compile()
+
+    await runGraph(compiled.execute('run-1', { shouldSuspend: true }))
     expect(executionOrder).toEqual(['before', 'suspendable'])
 
     executionOrder.length = 0
-    await runGraph(g.execute('run-1', () => ({ shouldSuspend: false })))
+    await runGraph(compiled.execute('run-1', () => ({ shouldSuspend: false })))
     expect(executionOrder).toEqual(['suspendable', 'after'])
   })
 
@@ -232,10 +236,12 @@ describe('Graph - Suspense & Resume', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    await runGraph(g.execute('run-1', { value: 5 }))
+    const compiled = g.compile()
+
+    await runGraph(compiled.execute('run-1', { value: 5 }))
     expect(observedValue).toBe(5)
 
-    await runGraph(g.execute('run-1', (state) => ({ ...state, value: 15 })))
+    await runGraph(compiled.execute('run-1', (state) => ({ ...state, value: 15 })))
     expect(observedValue).toBe(15)
   })
 
@@ -253,32 +259,34 @@ describe('Graph - Suspense & Resume', () => {
       .edge('START', 'retry')
       .edge('retry', 'END')
 
-    await runGraph(g.execute('run-1', { attempts: 0 }))
+    const compiled = g.compile()
+
+    await runGraph(compiled.execute('run-1', { attempts: 0 }))
     expect(callCount).toBe(1)
 
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 1 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 1 })))
     expect(callCount).toBe(2)
 
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 2 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 2 })))
     expect(callCount).toBe(3)
 
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 3 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 3 })))
     expect(callCount).toBe(4)
   })
 })
 
 describe('Graph - Checkpointing', () => {
   test('checkpoint is saved on suspense', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('a', ({ suspense }) => {
         suspense()
       })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 42 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 42 }))
 
     const checkpoint = await storage.load('run-1')
     expect(checkpoint).not.toBeNull()
@@ -287,31 +295,33 @@ describe('Graph - Checkpointing', () => {
   })
 
   test('checkpoint is deleted on completion', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 42 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 42 }))
 
     const checkpoint = await storage.load('run-1')
     expect(checkpoint).toBeNull()
   })
 
   test('different runIds have separate checkpoints', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('a', ({ state, suspense }) => {
         if (state().value < 100) suspense()
       })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 10 }))
-    await runGraph(g.execute('run-2', { value: 20 }))
+    const compiled = g.compile({ storage })
+
+    await runGraph(compiled.execute('run-1', { value: 10 }))
+    await runGraph(compiled.execute('run-2', { value: 20 }))
 
     const checkpoint1 = await storage.load('run-1')
     const checkpoint2 = await storage.load('run-2')
@@ -338,7 +348,7 @@ describe('Graph - Error Handling', () => {
       .edge('errorNode', 'after')
       .edge('after', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(executionOrder).toContain('before')
     expect(executionOrder).toContain('errorNode')
@@ -372,7 +382,7 @@ describe('Graph - Subgraph', () => {
       .edge('process', 'verify')
       .edge('verify', 'END')
 
-    await runGraph(parentGraph.execute('test-1', { input: 5 }))
+    await runGraph(parentGraph.compile().execute('test-1', { input: 5 }))
 
     expect(finalResult).toBe(10)
   })
@@ -411,12 +421,14 @@ describe('Graph - Subgraph', () => {
       .edge('START', 'child')
       .edge('child', 'END')
 
-    await runGraph(parentGraph.execute('test-resume', {}))
+    const compiled = parentGraph.compile()
+
+    await runGraph(compiled.execute('test-resume', {}))
 
     expect(executionLog).toEqual(['step1: step=0', 'step2: step=1, needsInput=true'])
 
     executionLog.length = 0
-    await runGraph(parentGraph.execute('test-resume', (state) => ({ ...state, childStep: undefined })))
+    await runGraph(compiled.execute('test-resume', (state) => ({ ...state, childStep: undefined })))
 
     expect(executionLog[0]).toBe('step2: step=1, needsInput=true')
   })
@@ -455,7 +467,7 @@ describe('Graph - Subgraph', () => {
       .edge('child', 'verify')
       .edge('verify', 'END')
 
-    await runGraph(rootGraph.execute('test-nested', { level: 0 }))
+    await runGraph(rootGraph.compile().execute('test-nested', { level: 0 }))
 
     expect(finalLevel).toBe(1)
   })
@@ -488,7 +500,7 @@ describe('Graph - Subgraph', () => {
       .edge('START', 'child')
       .edge('child', 'END')
 
-    await runGraph(parentGraph.execute('test-1', { base: 50 }))
+    await runGraph(parentGraph.compile().execute('test-1', { base: 50 }))
 
     expect(outputMapperCalled).toBe(true)
     expect(receivedChildState).toEqual({ computed: 100 })
@@ -518,7 +530,7 @@ describe('Graph - Subgraph', () => {
       .edge('subgraph', 'after')
       .edge('after', 'END')
 
-    await runGraph(parentGraph.execute('test-1', { value: 0 }))
+    await runGraph(parentGraph.compile().execute('test-1', { value: 0 }))
 
     expect(executionOrder).toEqual(['before', 'childNode', 'after'])
   })
@@ -566,7 +578,7 @@ describe('Graph - Edge Cases', () => {
       .edge('check', (state) => (state.shouldEnd ? 'END' : 'process'))
       .edge('process', 'END')
 
-    await runGraph(g.execute('run-1', { shouldEnd: true }))
+    await runGraph(g.compile().execute('run-1', { shouldEnd: true }))
 
     expect(executionOrder).toEqual(['check'])
   })
@@ -586,7 +598,7 @@ describe('Graph - Edge Cases', () => {
       .edge('pathB', 'join')
       .edge('join', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(joinExecutionCount).toBe(1)
   })
@@ -612,7 +624,7 @@ describe('Graph - Edge Cases', () => {
       .edge('updateB', 'collect')
       .edge('collect', 'END')
 
-    await runGraph(g.execute('run-1', { a: 0, b: 0 }))
+    await runGraph(g.compile().execute('run-1', { a: 0, b: 0 }))
 
     expect(finalState?.a).toBe(100)
     expect(finalState?.b).toBe(200)
@@ -629,7 +641,7 @@ describe('Graph - Edge Cases', () => {
       .edge('START', 'reader')
       .edge('reader', 'END')
 
-    await runGraph(g.execute('fresh-run', (existing) => {
+    await runGraph(g.compile().execute('fresh-run', (existing) => {
       initializerCalled = true
       return { value: existing?.value ?? 42 }
     }))
@@ -639,10 +651,10 @@ describe('Graph - Edge Cases', () => {
   })
 
   test('multiple parallel nodes can suspend', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'fork' | 'suspendA' | 'suspendB' | 'join'>()
     const executionOrder: string[] = []
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('fork', () => { executionOrder.push('fork') })
       .node('suspendA', ({ suspense }) => {
         executionOrder.push('suspendA')
@@ -660,7 +672,7 @@ describe('Graph - Edge Cases', () => {
       .edge('suspendB', 'join')
       .edge('join', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toContain('fork')
     expect(executionOrder).toContain('suspendA')
@@ -697,7 +709,7 @@ describe('Graph - Edge Cases', () => {
       .edge('child', 'after')
       .edge('after', 'END')
 
-    await runGraph(parentGraph.execute('test-1', { value: 0 }))
+    await runGraph(parentGraph.compile().execute('test-1', { value: 0 }))
 
     expect(executionOrder).toContain('parentBefore')
     expect(executionOrder).toContain('childWillFail')
@@ -723,7 +735,7 @@ describe('Graph - SuspenseError', () => {
 
 describe('Graph - Checkpoint Edge Cases', () => {
   test('checkpoint with empty nodeIds starts fresh execution', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'a'>()
     await storage.save('run-1', {
       state: { value: 999 },
       nodeIds: [],
@@ -731,18 +743,18 @@ describe('Graph - Checkpoint Edge Cases', () => {
     })
 
     const executionOrder: string[] = []
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('a', () => { executionOrder.push('a') })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toContain('a')
   })
 
   test('checkpoint with non-existent node IDs terminates without execution', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'real' | 'nonexistent1' | 'nonexistent2'>()
     await storage.save('run-1', {
       state: { value: 10 },
       nodeIds: ['nonexistent1', 'nonexistent2'],
@@ -750,22 +762,22 @@ describe('Graph - Checkpoint Edge Cases', () => {
     })
 
     const executionOrder: string[] = []
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('real', () => { executionOrder.push('real') })
       .edge('START', 'real')
       .edge('real', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual([])
   })
 
   test('initial state function receives checkpoint state when resuming', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     let callCount = 0
     let receivedExisting: { value: number } | undefined
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('suspender', ({ suspense }) => {
         callCount++
         if (callCount === 1) {
@@ -775,9 +787,11 @@ describe('Graph - Checkpoint Edge Cases', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    await runGraph(g.execute('run-1', { value: 100 }))
+    const compiled = g.compile({ storage })
 
-    await runGraph(g.execute('run-1', (existing) => {
+    await runGraph(compiled.execute('run-1', { value: 100 }))
+
+    await runGraph(compiled.execute('run-1', (existing) => {
       receivedExisting = existing
       return { value: existing?.value ?? 0 }
     }))
@@ -796,7 +810,7 @@ describe('Graph - Node Resolution Edge Cases', () => {
       .edge('a', 'nonexistent' as any)
       .edge('nonexistent' as any, 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual(['a'])
   })
@@ -809,7 +823,7 @@ describe('Graph - Node Resolution Edge Cases', () => {
       .node('unreachable', () => { executionOrder.push('unreachable') })
       .edge('START', 'terminal')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual(['terminal'])
     expect(executionOrder).not.toContain('unreachable')
@@ -821,7 +835,7 @@ describe('Graph - Node Resolution Edge Cases', () => {
         throw new Error('Should not reach here')
       })
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile().execute('run-1', { value: 0 }))
   })
 })
 
@@ -836,7 +850,7 @@ describe('Graph - Writer Event Emissions', () => {
       .edge('a', 'b')
       .edge('b', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile().execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -864,7 +878,7 @@ describe('Graph - Writer Event Emissions', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile().execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -916,7 +930,7 @@ describe('Graph - Complex State Scenarios', () => {
       .edge('modifier', 'reader')
       .edge('reader', 'END')
 
-    await runGraph(g.execute('run-1', {
+    await runGraph(g.compile().execute('run-1', {
       level1: { level2: { level3: { value: 1 } } }
     }))
 
@@ -938,7 +952,7 @@ describe('Graph - Complex State Scenarios', () => {
       .edge('appendItem', 'reader')
       .edge('reader', 'END')
 
-    await runGraph(g.execute('run-1', { items: [1, 2, 3] }))
+    await runGraph(g.compile().execute('run-1', { items: [1, 2, 3] }))
 
     expect(finalItems).toEqual([1, 2, 3, 4])
   })
@@ -954,7 +968,7 @@ describe('Graph - Complex State Scenarios', () => {
       .edge('START', 'checkEmpty')
       .edge('checkEmpty', 'END')
 
-    await runGraph(g.execute('run-1', {} as Record<string, never>))
+    await runGraph(g.compile().execute('run-1', {} as Record<string, never>))
 
     expect(stateObserved).toBe(true)
   })
@@ -974,7 +988,7 @@ describe('Graph - executeInternal', () => {
       write: jest.fn()
     }
 
-    const finalState = await g.executeInternal('run-1', { value: 5 }, mockWriter as any)
+    const finalState = await g.compile().executeInternal('run-1', { value: 5 }, mockWriter as any)
 
     expect(finalState.value).toBe(10)
   })
@@ -991,7 +1005,7 @@ describe('Graph - executeInternal', () => {
 
     let thrown: Error | undefined
     try {
-      await g.executeInternal('run-1', { value: 0 }, mockWriter as any)
+      await g.compile().executeInternal('run-1', { value: 0 }, mockWriter as any)
     } catch (error) {
       thrown = error as Error
     }
@@ -1000,10 +1014,10 @@ describe('Graph - executeInternal', () => {
   })
 
   test('executeInternal can resume after suspense', async () => {
-    const storage = new InMemoryStorage<{ callCount: number }, string>()
+    const storage = new InMemoryStorage<{ callCount: number }, 'START' | 'END' | 'conditional' | 'after'>()
     const executionOrder: string[] = []
 
-    const g = graph<{ callCount: number }>({ storage: storage as any })
+    const g = graph<{ callCount: number }>()
       .node('conditional', ({ state, suspense, update }) => {
         const count = state().callCount
         executionOrder.push(`conditional:${count}`)
@@ -1020,15 +1034,16 @@ describe('Graph - executeInternal', () => {
       .edge('after', 'END')
 
     const mockWriter = { write: jest.fn() }
+    const compiled = g.compile({ storage })
 
     try {
-      await g.executeInternal('run-1', { callCount: 0 }, mockWriter as any)
+      await compiled.executeInternal('run-1', { callCount: 0 }, mockWriter as any)
     } catch (e) { }
 
     expect(executionOrder).toEqual(['conditional:0'])
 
     executionOrder.length = 0
-    const finalState = await g.executeInternal(
+    const finalState = await compiled.executeInternal(
       'run-1',
       { callCount: 0 },
       mockWriter as any
@@ -1042,9 +1057,9 @@ describe('Graph - executeInternal', () => {
 
 describe('Graph - Concurrent Executions', () => {
   test('multiple executions with same storage are isolated', async () => {
-    const storage = new InMemoryStorage<{ id: string }, string>()
+    const storage = new InMemoryStorage<{ id: string }, 'START' | 'END' | 'suspender'>()
 
-    const g = graph<{ id: string }>({ storage: storage as any })
+    const g = graph<{ id: string }>()
       .node('suspender', ({ state, suspense }) => {
         if (state().id === 'suspend-me') {
           suspense()
@@ -1053,9 +1068,11 @@ describe('Graph - Concurrent Executions', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
+    const compiled = g.compile({ storage })
+
     await Promise.all([
-      runGraph(g.execute('run-1', { id: 'suspend-me' })),
-      runGraph(g.execute('run-2', { id: 'complete' }))
+      runGraph(compiled.execute('run-1', { id: 'suspend-me' })),
+      runGraph(compiled.execute('run-2', { id: 'complete' }))
     ])
 
     const checkpoint1 = await storage.load('run-1')
@@ -1078,7 +1095,7 @@ describe('Graph - Writer Usage in Nodes', () => {
       .edge('START', 'broadcaster')
       .edge('broadcaster', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile().execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1097,9 +1114,9 @@ describe('Graph - Writer Usage in Nodes', () => {
 
 describe('Graph - Checkpoint Persistence Across Batches', () => {
   test('state is persisted after each batch execution', async () => {
-    const storage = new InMemoryStorage<{ step: number }, string>()
+    const storage = new InMemoryStorage<{ step: number }, 'START' | 'END' | 'step1' | 'step2'>()
 
-    const g = graph<{ step: number }>({ storage: storage as any })
+    const g = graph<{ step: number }>()
       .node('step1', ({ update }) => {
         update({ step: 1 })
       })
@@ -1111,7 +1128,7 @@ describe('Graph - Checkpoint Persistence Across Batches', () => {
       .edge('step1', 'step2')
       .edge('step2', 'END')
 
-    await runGraph(g.execute('run-1', { step: 0 }))
+    await runGraph(g.compile({ storage }).execute('run-1', { step: 0 }))
 
     const finalCheckpoint = await storage.load('run-1')
     expect(finalCheckpoint?.state.step).toBe(2)
@@ -1123,19 +1140,19 @@ describe('Graph - onFinish callback', () => {
     let onFinishCalled = false
     let receivedState: { value: number } | undefined
 
-    const g = graph<{ value: number }>({
-      onFinish: ({ state }) => {
-        onFinishCalled = true
-        receivedState = state
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('modifier', ({ update }) => {
         update({ value: 42 })
       })
       .edge('START', 'modifier')
       .edge('modifier', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({
+      onFinish: ({ state }) => {
+        onFinishCalled = true
+        receivedState = state
+      }
+    }).execute('run-1', { value: 0 }))
 
     expect(onFinishCalled).toBe(true)
     expect(receivedState?.value).toBe(42)
@@ -1144,14 +1161,14 @@ describe('Graph - onFinish callback', () => {
   test('onFinish is called even for empty graph (START → END)', async () => {
     let onFinishCalled = false
 
-    const g = graph<{ value: number }>({
+    const g = graph<{ value: number }>()
+      .edge('START', 'END')
+
+    await runGraph(g.compile({
       onFinish: () => {
         onFinishCalled = true
       }
-    })
-      .edge('START', 'END')
-
-    await runGraph(g.execute('run-1', { value: 0 }))
+    }).execute('run-1', { value: 0 }))
 
     expect(onFinishCalled).toBe(true)
   })
@@ -1160,12 +1177,7 @@ describe('Graph - onFinish callback', () => {
     let onFinishCalled = false
     let receivedState: { value: number } | undefined
 
-    const g = graph<{ value: number }>({
-      onFinish: ({ state }) => {
-        onFinishCalled = true
-        receivedState = state
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('suspender', ({ suspense, update }) => {
         update({ value: 42 })
         suspense()
@@ -1173,7 +1185,12 @@ describe('Graph - onFinish callback', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({
+      onFinish: ({ state }) => {
+        onFinishCalled = true
+        receivedState = state
+      }
+    }).execute('run-1', { value: 0 }))
 
     // onFinish is called when the stream completes, even if graph suspended
     expect(onFinishCalled).toBe(true)
@@ -1184,17 +1201,17 @@ describe('Graph - onFinish callback', () => {
   test('onFinish async callback is awaited', async () => {
     let asyncWorkCompleted = false
 
-    const g = graph<{ value: number }>({
-      onFinish: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        asyncWorkCompleted = true
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({
+      onFinish: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        asyncWorkCompleted = true
+      }
+    }).execute('run-1', { value: 0 }))
 
     expect(asyncWorkCompleted).toBe(true)
   })
@@ -1205,32 +1222,27 @@ describe('Graph - onStart callback', () => {
     let onStartCalled = false
     let receivedState: { value: number } | undefined
 
-    const g = graph<{ value: number }>({
-      onStart: ({ state }) => {
-        onStartCalled = true
-        receivedState = state
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 100 }))
+    await runGraph(g.compile({
+      onStart: ({ state }) => {
+        onStartCalled = true
+        receivedState = state
+      }
+    }).execute('run-1', { value: 100 }))
 
     expect(onStartCalled).toBe(true)
     expect(receivedState?.value).toBe(100)
   })
 
   test('onStart is NOT called when resuming from checkpoint', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspendable'>()
     let onStartCallCount = 0
 
-    const g = graph<{ value: number }>({
-      storage: storage as any,
-      onStart: () => {
-        onStartCallCount++
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('suspendable', ({ state, suspense }) => {
         if (state().value < 10) {
           suspense()
@@ -1239,30 +1251,39 @@ describe('Graph - onStart callback', () => {
       .edge('START', 'suspendable')
       .edge('suspendable', 'END')
 
+    const compiled = g.compile({
+      storage,
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+
     // First execution - should call onStart
-    await runGraph(g.execute('run-1', { value: 5 }))
+    await runGraph(compiled.execute('run-1', { value: 5 }))
     expect(onStartCallCount).toBe(1)
 
     // Resume from checkpoint - should NOT call onStart again
-    await runGraph(g.execute('run-1', (state) => ({ ...state, value: 20 })))
+    await runGraph(compiled.execute('run-1', (state) => ({ ...state, value: 20 })))
     expect(onStartCallCount).toBe(1) // Still 1, not 2
   })
 
   test('onStart is called for each new runId', async () => {
     let onStartCallCount = 0
 
-    const g = graph<{ value: number }>({
-      onStart: () => {
-        onStartCallCount++
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
-    await runGraph(g.execute('run-2', { value: 0 }))
-    await runGraph(g.execute('run-3', { value: 0 }))
+    const compiled = g.compile({
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+
+    await runGraph(compiled.execute('run-1', { value: 0 }))
+    await runGraph(compiled.execute('run-2', { value: 0 }))
+    await runGraph(compiled.execute('run-3', { value: 0 }))
 
     expect(onStartCallCount).toBe(3)
   })
@@ -1270,16 +1291,16 @@ describe('Graph - onStart callback', () => {
   test('onStart has access to writer', async () => {
     const events: Array<{ type: string; data: unknown }> = []
 
-    const g = graph<{ value: number }>({
-      onStart: ({ writer }) => {
-        writer.write({ type: 'data-custom', data: { source: 'onStart' } })
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => { })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile({
+      onStart: ({ writer }) => {
+        writer.write({ type: 'data-custom', data: { source: 'onStart' } })
+      }
+    }).execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1298,19 +1319,19 @@ describe('Graph - onStart callback', () => {
   test('onStart async callback is awaited before graph execution', async () => {
     const executionOrder: string[] = []
 
-    const g = graph<{ value: number }>({
-      onStart: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        executionOrder.push('onStart')
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => {
         executionOrder.push('node-a')
       })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({
+      onStart: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        executionOrder.push('onStart')
+      }
+    }).execute('run-1', { value: 0 }))
 
     expect(executionOrder).toEqual(['onStart', 'node-a'])
   })
@@ -1318,35 +1339,30 @@ describe('Graph - onStart callback', () => {
   test('onStart and onFinish both work together', async () => {
     const callOrder: string[] = []
 
-    const g = graph<{ value: number }>({
-      onStart: () => {
-        callOrder.push('onStart')
-      },
-      onFinish: () => {
-        callOrder.push('onFinish')
-      }
-    })
+    const g = graph<{ value: number }>()
       .node('a', () => {
         callOrder.push('node-a')
       })
       .edge('START', 'a')
       .edge('a', 'END')
 
-    await runGraph(g.execute('run-1', { value: 0 }))
+    await runGraph(g.compile({
+      onStart: () => {
+        callOrder.push('onStart')
+      },
+      onFinish: () => {
+        callOrder.push('onFinish')
+      }
+    }).execute('run-1', { value: 0 }))
 
     expect(callOrder).toEqual(['onStart', 'node-a', 'onFinish'])
   })
 
   test('multiple suspend/resume cycles only call onStart once', async () => {
-    const storage = new InMemoryStorage<{ attempts: number }, string>()
+    const storage = new InMemoryStorage<{ attempts: number }, 'START' | 'END' | 'retry'>()
     let onStartCallCount = 0
 
-    const g = graph<{ attempts: number }>({
-      storage: storage as any,
-      onStart: () => {
-        onStartCallCount++
-      }
-    })
+    const g = graph<{ attempts: number }>()
       .node('retry', ({ state, suspense }) => {
         if (state().attempts < 3) {
           suspense()
@@ -1355,20 +1371,27 @@ describe('Graph - onStart callback', () => {
       .edge('START', 'retry')
       .edge('retry', 'END')
 
+    const compiled = g.compile({
+      storage,
+      onStart: () => {
+        onStartCallCount++
+      }
+    })
+
     // Initial execution
-    await runGraph(g.execute('run-1', { attempts: 0 }))
+    await runGraph(compiled.execute('run-1', { attempts: 0 }))
     expect(onStartCallCount).toBe(1)
 
     // Resume 1
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 1 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 1 })))
     expect(onStartCallCount).toBe(1)
 
     // Resume 2
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 2 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 2 })))
     expect(onStartCallCount).toBe(1)
 
     // Resume 3 (completes)
-    await runGraph(g.execute('run-1', (s) => ({ ...s, attempts: 3 })))
+    await runGraph(compiled.execute('run-1', (s) => ({ ...s, attempts: 3 })))
     expect(onStartCallCount).toBe(1)
   })
 })
@@ -1382,7 +1405,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'a')
       .edge('a', 'END')
 
-    const stream = g.execute('run-1', { value: 42 })
+    const stream = g.compile().execute('run-1', { value: 42 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1408,7 +1431,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'modifier')
       .edge('modifier', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile().execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1446,7 +1469,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('increment2', 'increment3')
       .edge('increment3', 'END')
 
-    const stream = g.execute('run-1', { count: 0 })
+    const stream = g.compile().execute('run-1', { count: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1477,7 +1500,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'doubler')
       .edge('doubler', 'END')
 
-    const stream = g.execute('run-1', { count: 5 })
+    const stream = g.compile().execute('run-1', { count: 5 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1496,10 +1519,10 @@ describe('Graph - State Streaming via data-state events', () => {
   })
 
   test('emits data-state event when resuming from checkpoint with state factory', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     const events: Array<{ type: string; data: unknown }> = []
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('suspender', ({ state, suspense }) => {
         if (state().value < 100) {
           suspense()
@@ -1508,11 +1531,13 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
+    const compiled = g.compile({ storage })
+
     // First execution - suspend
-    await runGraph(g.execute('run-1', { value: 50 }))
+    await runGraph(compiled.execute('run-1', { value: 50 }))
 
     // Resume with state factory
-    const stream = g.execute('run-1', (existing) => ({
+    const stream = compiled.execute('run-1', (existing) => ({
       value: (existing?.value ?? 0) + 100
     }))
     const reader = stream.getReader()
@@ -1532,10 +1557,10 @@ describe('Graph - State Streaming via data-state events', () => {
   })
 
   test('emits data-state event when restoring from checkpoint with existing state', async () => {
-    const storage = new InMemoryStorage<{ value: number }, string>()
+    const storage = new InMemoryStorage<{ value: number }, 'START' | 'END' | 'suspender'>()
     const events: Array<{ type: string; data: unknown }> = []
 
-    const g = graph<{ value: number }>({ storage: storage as any })
+    const g = graph<{ value: number }>()
       .node('suspender', ({ state, suspense }) => {
         if (state().value < 100) {
           suspense()
@@ -1544,11 +1569,13 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'suspender')
       .edge('suspender', 'END')
 
+    const compiled = g.compile({ storage })
+
     // First execution - suspend with value 75
-    await runGraph(g.execute('run-1', { value: 75 }))
+    await runGraph(compiled.execute('run-1', { value: 75 }))
 
     // Resume with plain object (checkpoint state should be used)
-    const stream = g.execute('run-1', { value: 999 })
+    const stream = compiled.execute('run-1', { value: 999 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1590,7 +1617,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('parentModifier', 'child')
       .edge('child', 'END')
 
-    const stream = parentGraph.execute('run-1', { parentValue: 0 })
+    const stream = parentGraph.compile().execute('run-1', { parentValue: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1627,7 +1654,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('updateA', 'updateB')
       .edge('updateB', 'END')
 
-    const stream = g.execute('run-1', { a: 0, b: 'initial', c: true })
+    const stream = g.compile().execute('run-1', { a: 0, b: 'initial', c: true })
     const reader = stream.getReader()
 
     while (true) {
@@ -1666,7 +1693,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('START', 'modifier')
       .edge('modifier', 'END')
 
-    const stream = g.execute('run-1', { value: 0 })
+    const stream = g.compile().execute('run-1', { value: 0 })
     const reader = stream.getReader()
 
     while (true) {
@@ -1710,7 +1737,7 @@ describe('Graph - State Streaming via data-state events', () => {
       .edge('updateB', 'join')
       .edge('join', 'END')
 
-    const stream = g.execute('run-1', { a: 0, b: 0 })
+    const stream = g.compile().execute('run-1', { a: 0, b: 0 })
     const reader = stream.getReader()
 
     while (true) {

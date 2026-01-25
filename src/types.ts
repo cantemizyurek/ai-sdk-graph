@@ -82,6 +82,15 @@ export namespace GraphSDK {
     onStart?: (args: { state: State; writer: UIMessageStreamWriter }) => Promise<void> | void
   }
 
+  export interface CompileOptions<
+    State extends Record<string, unknown>,
+    NodeKeys extends string
+  > {
+    storage?: GraphStorage<State, NodeKeys>
+    onFinish?: (args: { state: State }) => Promise<void> | void
+    onStart?: (args: { state: State; writer: UIMessageStreamWriter }) => Promise<void> | void
+  }
+
   export type Writer = Parameters<
     Parameters<typeof createUIMessageStream>[0]['execute']
   >[0]['writer']

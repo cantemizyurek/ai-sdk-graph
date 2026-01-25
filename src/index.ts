@@ -1,4 +1,5 @@
 export * from './graph'
+export * from './compiled-graph'
 export * from './storage'
 export * from './types'
 export * from './utils'
