@@ -345,6 +345,8 @@ export class CompiledGraph<
     context.emit({ type: 'node:start', nodeId: node.id })
 
     try {
+      const { params, pendingUpdates } = this.createNodeExecutionParams(context, node.id)
+
       if (!isBuiltIn && this.nodeMiddleware.length > 0) {
         const nodeCtx: GraphSDK.NodeMiddlewareContext<State, NodeKeys> = {
           runId: context.runId,
@@ -355,11 +357,13 @@ export class CompiledGraph<
         }
         await composeMiddleware(
           this.nodeMiddleware,
-          async () => { await node.execute(this.createNodeExecutionParams(context, node.id)) }
+          async () => { await node.execute(params) }
         )(nodeCtx)
       } else {
-        await node.execute(this.createNodeExecutionParams(context, node.id))
+        await node.execute(params)
       }
+
+      await Promise.all(pendingUpdates)
       context.emit({ type: 'node:end', nodeId: node.id })
       return null
     } catch (error) {
@@ -374,36 +378,45 @@ export class CompiledGraph<
   private createNodeExecutionParams(
     context: GraphSDK.ExecutionContext<State, NodeKeys>,
     nodeId: NodeKeys | null = null
-  ): Parameters<GraphSDK.Node<State, NodeKeys>['execute']>[0] {
-    return {
+  ): {
+    params: Parameters<GraphSDK.Node<State, NodeKeys>['execute']>[0]
+    pendingUpdates: Promise<void>[]
+  } {
+    const pendingUpdates: Promise<void>[] = []
+    const params = {
       state: () => context.state,
       writer: context.writer,
       suspense: this.createSuspenseFunction(),
-      update: async (update: GraphSDK.StateUpdate<State>): Promise<void> => {
-        if (this.stateMiddleware.length > 0) {
-          const resolvedUpdate = typeof update === 'function' ? update(context.state) : update
-          const stateCtx: GraphSDK.StateMiddlewareContext<State, NodeKeys> = {
-            runId: context.runId,
-            nodeId,
-            currentState: context.state,
-            update,
-            resolvedUpdate
+      update: (update: GraphSDK.StateUpdate<State>): Promise<void> => {
+        const p = (async () => {
+          if (this.stateMiddleware.length > 0) {
+            const resolvedUpdate = typeof update === 'function' ? update(context.state) : update
+            const stateCtx: GraphSDK.StateMiddlewareContext<State, NodeKeys> = {
+              runId: context.runId,
+              nodeId,
+              currentState: context.state,
+              update,
+              resolvedUpdate
+            }
+            const finalPartial = await composeMiddleware<
+              GraphSDK.StateMiddlewareContext<State, NodeKeys>,
+              Partial<State>
+            >(
+              this.stateMiddleware,
+              async (ctx) => ctx.resolvedUpdate
+            )(stateCtx)
+            context.state = { ...context.state, ...finalPartial }
+            context.emit({ type: 'state', state: context.state })
+          } else {
+            context.state = this.stateManager.apply(context.state, update)
+            context.emit({ type: 'state', state: context.state })
           }
-          const finalPartial = await composeMiddleware<
-            GraphSDK.StateMiddlewareContext<State, NodeKeys>,
-            Partial<State>
-          >(
-            this.stateMiddleware,
-            async (ctx) => ctx.resolvedUpdate
-          )(stateCtx)
-          context.state = { ...context.state, ...finalPartial }
-          context.emit({ type: 'state', state: context.state })
-        } else {
-          context.state = this.stateManager.apply(context.state, update)
-          context.emit({ type: 'state', state: context.state })
-        }
+        })()
+        pendingUpdates.push(p)
+        return p
       }
     }
+    return { params, pendingUpdates }
   }
 
   private async executeSubgraphNode(

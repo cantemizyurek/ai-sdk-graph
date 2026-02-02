@@ -613,6 +613,125 @@ describe('Middleware - update() returns Promise<void>', () => {
   })
 })
 
+describe('Middleware - Un-awaited update() with async state middleware', () => {
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  test('un-awaited update() + async state middleware → successor reads correct state', async () => {
+    let finalState: { value: number } | undefined
+
+    const g = graph<{ value: number }>()
+      .node('updater', ({ update }) => {
+        // Fire-and-forget: do NOT await
+        update({ value: 42 })
+      })
+      .node('reader', ({ state }) => {
+        finalState = state()
+      })
+      .edge('START', 'updater')
+      .edge('updater', 'reader')
+      .edge('reader', 'END')
+      .use({
+        state: async (ctx, next) => {
+          await delay(10) // async middleware with small delay
+          return next()
+        }
+      })
+
+    await runGraph(g.compile().stream('run-1', { value: 0 }))
+
+    expect(finalState?.value).toBe(42)
+  })
+
+  test('multiple un-awaited update() calls all settle', async () => {
+    let finalState: { a: number; b: number } | undefined
+
+    const g = graph<{ a: number; b: number }>()
+      .node('updater', ({ update }) => {
+        // Fire-and-forget both
+        update({ a: 1 })
+        update({ b: 2 })
+      })
+      .node('reader', ({ state }) => {
+        finalState = state()
+      })
+      .edge('START', 'updater')
+      .edge('updater', 'reader')
+      .edge('reader', 'END')
+      .use({
+        state: async (ctx, next) => {
+          await delay(10)
+          return next()
+        }
+      })
+
+    await runGraph(g.compile().stream('run-1', { a: 0, b: 0 }))
+
+    expect(finalState?.a).toBe(1)
+    expect(finalState?.b).toBe(2)
+  })
+
+  test('dynamic routing correct with un-awaited update() + async state middleware', async () => {
+    const visited: string[] = []
+
+    const g = graph<{ path: string }>()
+      .node('setter', ({ update }) => {
+        // Fire-and-forget
+        update({ path: 'right' })
+      })
+      .node('left', () => { visited.push('left') })
+      .node('right', () => { visited.push('right') })
+      .edge('START', 'setter')
+      .edge('setter', (s) => s.path as 'left' | 'right')
+      .edge('left', 'END')
+      .edge('right', 'END')
+      .use({
+        state: async (ctx, next) => {
+          await delay(10)
+          return next()
+        }
+      })
+
+    await runGraph(g.compile().stream('run-1', { path: 'left' }))
+
+    expect(visited).toEqual(['right'])
+  })
+
+  test('event ordering: state event emitted before node:end', async () => {
+    const events: string[] = []
+
+    const g = graph<{ value: number }>()
+      .node('updater', ({ update }) => {
+        // Fire-and-forget
+        update({ value: 99 })
+      })
+      .edge('START', 'updater')
+      .edge('updater', 'END')
+      .use({
+        state: async (ctx, next) => {
+          await delay(10)
+          return next()
+        }
+      })
+
+    await g.compile().execute('run-1', { value: 0 }, {
+      onEvent: (event) => {
+        if (event.type === 'state' || (event.type === 'node:end' && event.nodeId === 'updater')) {
+          events.push(event.type)
+        }
+      }
+    })
+
+    const stateIdx = events.indexOf('state')
+    const nodeEndIdx = events.indexOf('node:end')
+    // Filter out the initial state event emitted at context creation
+    const stateEvents = events.filter(e => e === 'state')
+    const lastStateIdx = events.lastIndexOf('state')
+
+    expect(stateEvents.length).toBeGreaterThanOrEqual(1)
+    expect(lastStateIdx).toBeLessThan(nodeEndIdx)
+  })
+})
+
 describe('Middleware - Event Middleware', () => {
   test('event middleware intercepts all events', async () => {
     const intercepted: any[] = []
