@@ -540,6 +540,54 @@ describe('Middleware - Subgraphs', () => {
     expect(stateUpdates.some(u => u.nodeId === 'childUpdater')).toBe(true)
   })
 
+  test('state middleware intercepts and transforms subgraph output update', async () => {
+    let finalState: { parentVal: number } | undefined
+    const stateUpdates: Array<{ nodeId: string | null; resolvedUpdate: any }> = []
+
+    type ChildState = { childVal: number }
+    type ParentState = { parentVal: number }
+
+    const childGraph = graph<ChildState>()
+      .node('childNode', async ({ update }) => {
+        await update({ childVal: 50 })
+      })
+      .edge('START', 'childNode')
+      .edge('childNode', 'END')
+
+    const parentGraph = graph<ParentState>()
+      .graph('sub', childGraph, {
+        input: () => ({ childVal: 0 }),
+        output: (child) => ({ parentVal: child.childVal })
+      })
+      .node('reader', ({ state }) => {
+        finalState = state()
+      })
+      .edge('START', 'sub')
+      .edge('sub', 'reader')
+      .edge('reader', 'END')
+      .use({
+        state: async (ctx, next) => {
+          stateUpdates.push({ nodeId: ctx.nodeId, resolvedUpdate: { ...ctx.resolvedUpdate } })
+          const result = await next()
+          // Double any parentVal update coming from the subgraph output
+          if ('parentVal' in result) {
+            return { ...result, parentVal: (result.parentVal as number) * 2 }
+          }
+          return result
+        }
+      })
+
+    await runGraph(parentGraph.compile().stream('run-1', { parentVal: 0 }))
+
+    // Middleware should have seen the subgraph output update with nodeId='sub'
+    const subUpdate = stateUpdates.find(u => u.nodeId === 'sub')
+    expect(subUpdate).toBeDefined()
+    expect(subUpdate!.resolvedUpdate).toEqual({ parentVal: 50 })
+
+    // Final state should reflect middleware transformation (50 * 2 = 100)
+    expect(finalState?.parentVal).toBe(100)
+  })
+
   test('graph middleware does NOT propagate to subgraphs', async () => {
     let graphMiddlewareCallCount = 0
 

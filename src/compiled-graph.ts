@@ -451,7 +451,29 @@ export class CompiledGraph<
         )
 
         const parentUpdate = options.output(childFinalState, context.state)
-        context.state = this.stateManager.apply(context.state, parentUpdate)
+
+        if (this.stateMiddleware.length > 0) {
+          const resolvedUpdate = typeof parentUpdate === 'function'
+            ? parentUpdate(context.state)
+            : parentUpdate
+          const stateCtx: GraphSDK.StateMiddlewareContext<State, NodeKeys> = {
+            runId: context.runId,
+            nodeId: node.id,
+            currentState: context.state,
+            update: parentUpdate,
+            resolvedUpdate
+          }
+          const finalPartial = await composeMiddleware<
+            GraphSDK.StateMiddlewareContext<State, NodeKeys>,
+            Partial<State>
+          >(
+            this.stateMiddleware,
+            async (ctx) => ctx.resolvedUpdate
+          )(stateCtx)
+          context.state = { ...context.state, ...finalPartial }
+        } else {
+          context.state = this.stateManager.apply(context.state, parentUpdate)
+        }
         context.emit({ type: 'state', state: context.state })
       }
 
