@@ -2,6 +2,7 @@ import { InMemoryStorage } from './storage'
 import type { GraphSDK } from './types'
 import { createUIMessageStream } from 'ai'
 import type { Graph } from './graph'
+import { composeMiddleware } from './middleware'
 
 const BUILT_IN_NODES = {
   START: 'START',
@@ -20,6 +21,30 @@ export class SuspenseError extends Error {
   }
 }
 
+const nullWriter: GraphSDK.Writer = {
+  write() { },
+  merge() { }
+} as unknown as GraphSDK.Writer
+
+function composeEventMiddleware<
+  State extends Record<string, unknown>,
+  NodeKeys extends string
+>(
+  middlewares: GraphSDK.EventMiddleware<State, NodeKeys>[],
+  terminal: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
+): (event: GraphSDK.GraphEvent<State, NodeKeys>) => void {
+  return (event) => {
+    function dispatch(i: number): void {
+      if (i === middlewares.length) {
+        terminal(event)
+        return
+      }
+      middlewares[i]!(event, () => dispatch(i + 1))
+    }
+    dispatch(0)
+  }
+}
+
 export class CompiledGraph<
   State extends Record<string, unknown>,
   NodeKeys extends string = 'START' | 'END'
@@ -34,10 +59,11 @@ export class CompiledGraph<
     }
   >
   private readonly storage: GraphSDK.GraphStorage<State, NodeKeys>
-  private readonly emitter = new NodeEventEmitter<NodeKeys>()
   private readonly stateManager = new StateManager<State>()
-  private readonly onFinish: ({ state }: { state: State }) => Promise<void> | void
-  private readonly onStart: ({ state, writer }: { state: State, writer: GraphSDK.Writer }) => Promise<void> | void
+  private readonly graphMiddleware: GraphSDK.GraphMiddleware<State, NodeKeys>[]
+  private readonly nodeMiddleware: GraphSDK.NodeMiddleware<State, NodeKeys>[]
+  private readonly stateMiddleware: GraphSDK.StateMiddleware<State, NodeKeys>[]
+  private readonly eventMiddleware: GraphSDK.EventMiddleware<State, NodeKeys>[]
 
   constructor(
     nodeRegistry: ReadonlyMap<NodeKeys, GraphSDK.Node<State, NodeKeys>>,
@@ -49,45 +75,103 @@ export class CompiledGraph<
         options: GraphSDK.SubgraphOptions<State, any>
       }
     >,
-    options: GraphSDK.CompileOptions<State, NodeKeys> = {}
+    options: GraphSDK.CompileOptions<State, NodeKeys> = {},
+    graphMiddleware: GraphSDK.GraphMiddleware<State, NodeKeys>[] = [],
+    nodeMiddleware: GraphSDK.NodeMiddleware<State, NodeKeys>[] = [],
+    stateMiddleware: GraphSDK.StateMiddleware<State, NodeKeys>[] = [],
+    eventMiddleware: GraphSDK.EventMiddleware<State, NodeKeys>[] = []
   ) {
     this.nodeRegistry = nodeRegistry
     this.edgeRegistry = edgeRegistry
     this.subgraphRegistry = subgraphRegistry
     this.storage = options.storage ?? new InMemoryStorage()
-    this.onFinish = options.onFinish ?? (() => { })
-    this.onStart = options.onStart ?? (() => { })
+    this.graphMiddleware = graphMiddleware
+    this.nodeMiddleware = nodeMiddleware
+    this.stateMiddleware = stateMiddleware
+    this.eventMiddleware = eventMiddleware
   }
 
-  execute(
+  stream(
     runId: string,
     initialState: State | ((state: State | undefined) => State)
   ) {
     let context: GraphSDK.ExecutionContext<State, NodeKeys> | undefined
     return createUIMessageStream({
       execute: async ({ writer }) => {
-        const result = await this.createExecutionContext(runId, initialState, writer)
+        const emit = composeEventMiddleware<State, NodeKeys>(
+          this.eventMiddleware,
+          (event) => {
+            switch (event.type) {
+              case 'state':
+                writer.write({ type: 'data-state', data: event.state }); break
+              case 'node:start':
+                writer.write({ type: 'data-node-start', data: event.nodeId }); break
+              case 'node:end':
+                writer.write({ type: 'data-node-end', data: event.nodeId }); break
+              case 'node:suspense':
+                writer.write({ type: 'data-node-suspense', data: { nodeId: event.nodeId, data: event.data } }); break
+            }
+          }
+        )
+
+        const result = await this.createExecutionContext(runId, initialState, emit, writer)
         context = result.context
         const firstTime = result.firstTime
-        if (firstTime) {
-          await this.onStart({ state: context.state, writer })
-        }
-        await this.runExecutionLoop(context)
-      },
-      onFinish: async () => {
-        if (context) {
-          await this.onFinish({ state: context.state })
+
+        if (this.graphMiddleware.length > 0) {
+          const graphCtx: GraphSDK.GraphMiddlewareContext<State, NodeKeys> = {
+            runId: context.runId,
+            state: () => context!.state,
+            writer: context.writer,
+            isResume: !firstTime
+          }
+          await composeMiddleware(
+            this.graphMiddleware,
+            async () => { await this.runExecutionLoop(context!) }
+          )(graphCtx)
+        } else {
+          await this.runExecutionLoop(context)
         }
       }
     })
   }
 
+  async execute(
+    runId: string,
+    initialState: State | ((state: State | undefined) => State),
+    options?: { onEvent?: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void }
+  ): Promise<State> {
+    const emit = composeEventMiddleware<State, NodeKeys>(
+      this.eventMiddleware,
+      options?.onEvent ?? (() => { })
+    )
+    const { context, firstTime } = await this.createExecutionContext(runId, initialState, emit, nullWriter)
+
+    if (this.graphMiddleware.length > 0) {
+      const graphCtx: GraphSDK.GraphMiddlewareContext<State, NodeKeys> = {
+        runId: context.runId,
+        state: () => context.state,
+        writer: context.writer,
+        isResume: !firstTime
+      }
+      await composeMiddleware(
+        this.graphMiddleware,
+        async () => { await this.runExecutionLoop(context) }
+      )(graphCtx)
+    } else {
+      await this.runExecutionLoop(context)
+    }
+
+    return context.state
+  }
+
   async executeInternal(
     runId: string,
     initialState: State,
-    writer: GraphSDK.Writer
+    writer: GraphSDK.Writer,
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
   ): Promise<State> {
-    const { context } = await this.createExecutionContext(runId, initialState, writer)
+    const { context } = await this.createExecutionContext(runId, initialState, emit, writer)
     await this.runExecutionLoopInternal(context)
     return context.state
   }
@@ -95,10 +179,11 @@ export class CompiledGraph<
   private async createExecutionContext(
     runId: string,
     initialState: State | ((state: State | undefined) => State),
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void,
     writer: GraphSDK.Writer
   ): Promise<{ context: GraphSDK.ExecutionContext<State, NodeKeys>, firstTime: boolean }> {
-    const { context, firstTime } = await this.restoreCheckpoint(runId, initialState, writer)
-    return { context: { ...context, runId, writer }, firstTime }
+    const { context, firstTime } = await this.restoreCheckpoint(runId, initialState, emit)
+    return { context: { ...context, runId, writer, emit }, firstTime }
   }
 
   private async runExecutionLoop(context: GraphSDK.ExecutionContext<State, NodeKeys>): Promise<void> {
@@ -174,15 +259,15 @@ export class CompiledGraph<
   private async restoreCheckpoint(
     runId: string,
     initialState: State | ((state: State | undefined) => State),
-    writer: GraphSDK.Writer
-  ): Promise<{ context: Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'>, firstTime: boolean }> {
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
+  ): Promise<{ context: Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer' | 'emit'>, firstTime: boolean }> {
     const checkpoint = await this.storage.load(runId)
 
     if (this.isValidCheckpoint(checkpoint)) {
-      return { context: this.restoreFromCheckpoint(checkpoint, initialState, writer), firstTime: false }
+      return { context: this.restoreFromCheckpoint(checkpoint, initialState, emit), firstTime: false }
     }
 
-    return { context: this.createFreshExecution(initialState, writer), firstTime: true }
+    return { context: this.createFreshExecution(initialState, emit), firstTime: true }
   }
 
   private isValidCheckpoint(
@@ -204,9 +289,9 @@ export class CompiledGraph<
   private restoreFromCheckpoint(
     checkpoint: GraphSDK.Checkpoint<State, NodeKeys>,
     initialState: State | ((state: State | undefined) => State),
-    writer: GraphSDK.Writer
-  ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.stateManager.resolve(initialState, checkpoint.state, writer)
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
+  ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer' | 'emit'> {
+    const state = this.stateManager.resolve(initialState, checkpoint.state, emit)
     return {
       state,
       currentNodes: this.resolveNodeIds(checkpoint.nodeIds),
@@ -216,9 +301,9 @@ export class CompiledGraph<
 
   private createFreshExecution(
     initialState: State | ((state: State | undefined) => State),
-    writer: GraphSDK.Writer
-  ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer'> {
-    const state = this.stateManager.resolve(initialState, undefined, writer)
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
+  ): Omit<GraphSDK.ExecutionContext<State, NodeKeys>, 'runId' | 'writer' | 'emit'> {
+    const state = this.stateManager.resolve(initialState, undefined, emit)
     const startNode = this.nodeRegistry.get(BUILT_IN_NODES.START as NodeKeys)!
     return {
       state,
@@ -255,15 +340,31 @@ export class CompiledGraph<
       return this.executeSubgraphNode(node, context, subgraphEntry)
     }
 
-    this.emitter.emitStart(context.writer, node.id)
+    const isBuiltIn = node.id === BUILT_IN_NODES.START || node.id === BUILT_IN_NODES.END
+
+    context.emit({ type: 'node:start', nodeId: node.id })
 
     try {
-      await node.execute(this.createNodeExecutionParams(context))
-      this.emitter.emitEnd(context.writer, node.id)
+      if (!isBuiltIn && this.nodeMiddleware.length > 0) {
+        const nodeCtx: GraphSDK.NodeMiddlewareContext<State, NodeKeys> = {
+          runId: context.runId,
+          nodeId: node.id,
+          state: () => context.state,
+          writer: context.writer,
+          isSubgraph: false
+        }
+        await composeMiddleware(
+          this.nodeMiddleware,
+          async () => { await node.execute(this.createNodeExecutionParams(context, node.id)) }
+        )(nodeCtx)
+      } else {
+        await node.execute(this.createNodeExecutionParams(context, node.id))
+      }
+      context.emit({ type: 'node:end', nodeId: node.id })
       return null
     } catch (error) {
       if (error instanceof SuspenseError) {
-        this.emitter.emitSuspense(context.writer, node.id, error.data)
+        context.emit({ type: 'node:suspense', nodeId: node.id, data: error.data })
         return { node, error }
       }
       throw error
@@ -271,14 +372,36 @@ export class CompiledGraph<
   }
 
   private createNodeExecutionParams(
-    context: GraphSDK.ExecutionContext<State, NodeKeys>
+    context: GraphSDK.ExecutionContext<State, NodeKeys>,
+    nodeId: NodeKeys | null = null
   ): Parameters<GraphSDK.Node<State, NodeKeys>['execute']>[0] {
     return {
       state: () => context.state,
       writer: context.writer,
       suspense: this.createSuspenseFunction(),
-      update: (update: GraphSDK.StateUpdate<State>) => {
-        context.state = this.stateManager.apply(context.state, update, context.writer)
+      update: async (update: GraphSDK.StateUpdate<State>): Promise<void> => {
+        if (this.stateMiddleware.length > 0) {
+          const resolvedUpdate = typeof update === 'function' ? update(context.state) : update
+          const stateCtx: GraphSDK.StateMiddlewareContext<State, NodeKeys> = {
+            runId: context.runId,
+            nodeId,
+            currentState: context.state,
+            update,
+            resolvedUpdate
+          }
+          const finalPartial = await composeMiddleware<
+            GraphSDK.StateMiddlewareContext<State, NodeKeys>,
+            Partial<State>
+          >(
+            this.stateMiddleware,
+            async (ctx) => ctx.resolvedUpdate
+          )(stateCtx)
+          context.state = { ...context.state, ...finalPartial }
+          context.emit({ type: 'state', state: context.state })
+        } else {
+          context.state = this.stateManager.apply(context.state, update)
+          context.emit({ type: 'state', state: context.state })
+        }
       }
     }
   }
@@ -290,33 +413,56 @@ export class CompiledGraph<
   ): Promise<{ node: GraphSDK.Node<State, NodeKeys>; error: SuspenseError } | null> {
     const { subgraph, options } = entry
 
-    this.emitter.emitStart(context.writer, node.id)
+    context.emit({ type: 'node:start', nodeId: node.id })
 
     const subgraphRunId = this.generateSubgraphRunId(context.runId, node.id)
 
     try {
-      // Create a child CompiledGraph from the subgraph's registries
-      const childRunner = new CompiledGraph(
-        subgraph.nodes,
-        subgraph.edges,
-        subgraph.subgraphs,
-        { storage: this.storage }
-      )
+      const executeSubgraph = async () => {
+        const childRunner = new CompiledGraph(
+          subgraph.nodes,
+          subgraph.edges,
+          subgraph.subgraphs,
+          { storage: this.storage },
+          [],
+          this.nodeMiddleware as any[],
+          this.stateMiddleware as any[],
+          this.eventMiddleware as any[]
+        )
 
-      const childFinalState = await childRunner.executeInternal(
-        subgraphRunId,
-        options.input(context.state),
-        context.writer
-      )
+        const childFinalState = await childRunner.executeInternal(
+          subgraphRunId,
+          options.input(context.state),
+          context.writer,
+          context.emit as any
+        )
 
-      const parentUpdate = options.output(childFinalState, context.state)
-      context.state = this.stateManager.apply(context.state, parentUpdate, context.writer)
+        const parentUpdate = options.output(childFinalState, context.state)
+        context.state = this.stateManager.apply(context.state, parentUpdate)
+        context.emit({ type: 'state', state: context.state })
+      }
 
-      this.emitter.emitEnd(context.writer, node.id)
+      if (this.nodeMiddleware.length > 0) {
+        const nodeCtx: GraphSDK.NodeMiddlewareContext<State, NodeKeys> = {
+          runId: context.runId,
+          nodeId: node.id,
+          state: () => context.state,
+          writer: context.writer,
+          isSubgraph: true
+        }
+        await composeMiddleware(
+          this.nodeMiddleware,
+          async () => { await executeSubgraph() }
+        )(nodeCtx)
+      } else {
+        await executeSubgraph()
+      }
+
+      context.emit({ type: 'node:end', nodeId: node.id })
       return null
     } catch (error) {
       if (error instanceof SuspenseError) {
-        this.emitter.emitSuspense(context.writer, node.id, error.data)
+        context.emit({ type: 'node:suspense', nodeId: node.id, data: error.data })
         return { node, error }
       }
       throw error
@@ -379,42 +525,26 @@ export class CompiledGraph<
   }
 }
 
-class NodeEventEmitter<NodeKeys extends string> {
-  emitStart(writer: GraphSDK.Writer, nodeId: NodeKeys): void {
-    writer.write({ type: 'data-node-start', data: nodeId })
-  }
-
-  emitEnd(writer: GraphSDK.Writer, nodeId: NodeKeys): void {
-    writer.write({ type: 'data-node-end', data: nodeId })
-  }
-
-  emitSuspense(writer: GraphSDK.Writer, nodeId: NodeKeys, data: unknown): void {
-    writer.write({ type: 'data-node-suspense', data: { nodeId, data } })
-  }
-}
-
 class StateManager<State extends Record<string, unknown>> {
-  apply(state: State, update: GraphSDK.StateUpdate<State>, writer: GraphSDK.Writer): State {
-    const newState = {
+  apply(state: State, update: GraphSDK.StateUpdate<State>): State {
+    return {
       ...state,
       ...(typeof update === 'function' ? update(state) : update)
     }
-    writer.write({ type: 'data-state', data: newState })
-    return newState
   }
 
-  resolve(
+  resolve<NodeKeys extends string>(
     initialState: State | ((state: State | undefined) => State),
     existingState: State | undefined,
-    writer: GraphSDK.Writer
+    emit: (event: GraphSDK.GraphEvent<State, NodeKeys>) => void
   ): State {
     if (this.isStateFactory(initialState)) {
       const newState = initialState(existingState)
-      writer.write({ type: 'data-state', data: newState })
+      emit({ type: 'state', state: newState })
       return newState
     }
     const newState = existingState ?? initialState
-    writer.write({ type: 'data-state', data: newState })
+    emit({ type: 'state', state: newState })
     return newState
   }
 
