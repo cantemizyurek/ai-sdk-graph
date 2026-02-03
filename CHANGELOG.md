@@ -1,5 +1,11 @@
 # ai-sdk-graph
 
+## 0.6.0
+
+### Minor Changes
+
+- cab1112: Implement middleware support in Graph and CompiledGraph classes for enhanced execution control
+
 ## 0.5.0
 
 ### Minor Changes
