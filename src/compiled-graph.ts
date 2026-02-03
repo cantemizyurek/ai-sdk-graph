@@ -81,9 +81,11 @@ export class CompiledGraph<
     stateMiddleware: GraphSDK.StateMiddleware<State, NodeKeys>[] = [],
     eventMiddleware: GraphSDK.EventMiddleware<State, NodeKeys>[] = []
   ) {
-    this.nodeRegistry = nodeRegistry
-    this.edgeRegistry = edgeRegistry
-    this.subgraphRegistry = subgraphRegistry
+    this.nodeRegistry = new Map(nodeRegistry)
+    this.edgeRegistry = new Map(
+      Array.from(edgeRegistry.entries()).map(([k, v]) => [k, [...v]])
+    )
+    this.subgraphRegistry = new Map(subgraphRegistry)
     this.storage = options.storage ?? new InMemoryStorage()
     this.graphMiddleware = graphMiddleware
     this.nodeMiddleware = nodeMiddleware

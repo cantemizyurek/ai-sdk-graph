@@ -1502,6 +1502,30 @@ describe('Graph - State Streaming via data-state events', () => {
   })
 })
 
+describe('Graph - Immutability after compile()', () => {
+  test('mutating graph after compile() does not affect compiled graph', async () => {
+    const executionOrder: string[] = []
+
+    const g = graph<{ value: number }>()
+      .node('a', () => { executionOrder.push('a') })
+      .edge('START', 'a')
+      .edge('a', 'END')
+
+    const compiled = g.compile()
+
+    // Mutate the original graph after compilation — add node 'b' and re-route a→b→END
+    g.node('b', () => { executionOrder.push('b') })
+      .edge('a', 'b')
+      .edge('b', 'END')
+
+    // Compiled graph should still run the original topology: START→a→END
+    await runGraph(compiled.stream('run-1', { value: 0 }))
+
+    expect(executionOrder).toEqual(['a'])
+    expect(executionOrder).not.toContain('b')
+  })
+})
+
 describe('Graph - Headless execute()', () => {
   test('execute() returns final state', async () => {
     const g = graph<{ value: number }>()
