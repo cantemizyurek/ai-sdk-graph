@@ -16,6 +16,7 @@ export class Graph<
       options: GraphSDK.SubgraphOptions<State, any>
     }
   > = new Map()
+  private readonly middlewares: GraphSDK.Middleware<State, NodeKeys>[] = []
 
   constructor() {
     this.registerBuiltInNodes()
@@ -32,7 +33,7 @@ export class Graph<
       state: () => Readonly<State>
       writer: GraphSDK.Writer
       suspense: (data?: unknown) => never
-      update: (update: GraphSDK.StateUpdate<State>) => void
+      update: (update: GraphSDK.StateUpdate<State>) => Promise<void>
     }) => Promise<void> | void
   ): Graph<State, NodeKeys | NewKey> {
     const node: GraphSDK.Node<State, NewKey> = { id, execute }
@@ -90,12 +91,33 @@ export class Graph<
     return this.subgraphRegistry
   }
 
+  use(middleware: GraphSDK.Middleware<State, NodeKeys>): Graph<State, NodeKeys> {
+    this.middlewares.push(middleware)
+    return this
+  }
+
   compile(options: GraphSDK.CompileOptions<State, NodeKeys> = {}): CompiledGraph<State, NodeKeys> {
+    const graphMiddleware: GraphSDK.GraphMiddleware<State, NodeKeys>[] = []
+    const nodeMiddleware: GraphSDK.NodeMiddleware<State, NodeKeys>[] = []
+    const stateMiddleware: GraphSDK.StateMiddleware<State, NodeKeys>[] = []
+    const eventMiddleware: GraphSDK.EventMiddleware<State, NodeKeys>[] = []
+
+    for (const mw of this.middlewares) {
+      if (mw.graph) graphMiddleware.push(mw.graph)
+      if (mw.node) nodeMiddleware.push(mw.node)
+      if (mw.state) stateMiddleware.push(mw.state)
+      if (mw.event) eventMiddleware.push(mw.event)
+    }
+
     return new CompiledGraph(
       this.nodeRegistry,
       this.edgeRegistry,
       this.subgraphRegistry,
-      options
+      options,
+      graphMiddleware,
+      nodeMiddleware,
+      stateMiddleware,
+      eventMiddleware
     )
   }
 
