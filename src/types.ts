@@ -8,7 +8,7 @@ export namespace GraphSDK {
     ChildState extends Record<string, unknown>
   > {
     input: (parentState: ParentState) => ChildState
-    output: (childState: ChildState, parentState: ParentState) => Partial<ParentState>
+    output: (childState: ChildState, parentState: ParentState) => StateUpdate<ParentState>
   }
   export interface Graph<
     State extends Record<string, unknown>,
